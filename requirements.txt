@@ -1,0 +1,7 @@
+streamlit
+pandas
+yfinance
+openpyxl
+requests
+gspread
+plotly
