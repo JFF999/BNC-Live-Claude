@@ -506,7 +506,18 @@ def classifier_signal(score, confiance, risque, potentiel):
         return "À surveiller"
     return "Secondaire"
 
-def calculer_score_decision(df):
+def signal_portefeuille(potentiel):
+    # Signal orienté DÉCISION DE VENTE pour un titre détenu, basé sur le potentiel
+    # restant (Pré G %). Aligné sur les seuils de couleur (≤5 % vendre, <15 % surveiller).
+    if pd.isna(potentiel):
+        return ""
+    if potentiel <= 5:
+        return "Vendre"
+    if potentiel < 15:
+        return "À surveiller"
+    return "Attendre"
+
+def calculer_score_decision(df, pour_portefeuille=False):
     df = df.copy()
 
     potentiel = pd.to_numeric(df.get("Pré G %"), errors="coerce")     # en %
@@ -576,10 +587,15 @@ def calculer_score_decision(df):
     risque += df["Confiance"].apply(lambda v: pct_vers_points(60 - v, 0, 60)).fillna(0) * 0.25
     df["Risque"] = risque.clip(0, 100)
 
-    df["Signal"] = [
-        classifier_signal(s, c, r, p)
-        for s, c, r, p in zip(df["Score"], df["Confiance"], df["Risque"], potentiel)
-    ]
+    if pour_portefeuille:
+        # Portefeuille : signal de VENTE (Vendre / À surveiller / Attendre)
+        df["Signal"] = potentiel.apply(signal_portefeuille)
+    else:
+        # Prospects : signal d'ACHAT (Priorité / À surveiller / ...)
+        df["Signal"] = [
+            classifier_signal(s, c, r, p)
+            for s, c, r, p in zip(df["Score"], df["Confiance"], df["Risque"], potentiel)
+        ]
 
     return df
 
@@ -602,6 +618,15 @@ def couleur_signal(valeur):
         "À valider": "background-color: rgba(255, 209, 102, .25);",
         "Risque élevé": "background-color: rgba(217, 75, 75, .22);",
         "Objectif atteint": "background-color: rgba(127, 127, 127, .18);",
+    }
+    return couleurs.get(valeur, "")
+
+def couleur_signal_portefeuille(valeur):
+    # Vendre = rouge, À surveiller = jaune, Attendre = vert (comme la colonne Pré G %).
+    couleurs = {
+        "Vendre": "background-color: rgba(217, 75, 75, .28);",
+        "À surveiller": "background-color: rgba(255, 209, 102, .28);",
+        "Attendre": "background-color: rgba(0, 166, 90, .22);",
     }
     return couleurs.get(valeur, "")
 
@@ -678,7 +703,7 @@ try:
     df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes)  # === V4 ===
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
-    df_live = calculer_score_decision(df_live)  # === v5 : après conversion en % ===
+    df_live = calculer_score_decision(df_live, pour_portefeuille=True)  # === v5 : signal de vente ===
 
     df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes)
     df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes)  # === V4 ===
@@ -736,10 +761,9 @@ try:
     colonnes_base_port.append("Gain $")
     colonnes_base_port.append("Gain %")
 
+    # Portefeuille : seul le Signal (Vendre / À surveiller / Attendre) est affiché.
+    # Score / Confiance / Risque restent réservés aux onglets Pros.
     if afficher_signal: colonnes_base_port.append("Signal")
-    if afficher_score: colonnes_base_port.append("Score")
-    if afficher_confiance: colonnes_base_port.append("Confiance")
-    if afficher_risque: colonnes_base_port.append("Risque")
 
     if afficher_var: colonnes_base_port.append("Var %")
     if afficher_tendance: colonnes_base_port.append("Tendance")
@@ -832,7 +856,7 @@ try:
             st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
 
         with cols_s[idx_tri]:
-            colonne_tri = st.selectbox("Tri", ["Score", "Pré G %", "Gain %", "Risque"], key="tri_portefeuille", label_visibility="collapsed")
+            colonne_tri = st.selectbox("Tri", ["Pré G %", "Gain %"], key="tri_portefeuille", label_visibility="collapsed")
 
         # Pré G % se trie en ordre CROISSANT (titres proches/au-dessus de l'objectif = à surveiller en haut).
         if colonne_tri == "Pré G %":
@@ -849,7 +873,7 @@ try:
         if afficher_var and 'Var %' in df_live.columns:
             styled_port = styled_port.map(couleur_var, subset=['Var %'])
         if 'Signal' in df_live.columns:
-            styled_port = styled_port.map(couleur_signal, subset=['Signal'])
+            styled_port = styled_port.map(couleur_signal_portefeuille, subset=['Signal'])
 
         st.dataframe(
             styled_port,
