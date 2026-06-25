@@ -146,7 +146,13 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
                 # Google Sheets utilise des indices basés sur 1 (A=1, B=2...)
                 colonnes_a_ecrire[idx + 1] = df_col_name
 
-        if not colonnes_a_ecrire:
+        # === Description : colonne TEXTE, traitée à part ===
+        # Le pare-feu numérique ci-dessus la bloquerait (elle est en zone protégée).
+        # On l'autorise ici, mais on n'écrit JAMAIS par-dessus une description déjà
+        # présente : seules les cellules VIDES du Sheet sont remplies (avec le nom Yahoo).
+        idx_description = entetes.index('Description') if 'Description' in entetes else None
+
+        if not colonnes_a_ecrire and idx_description is None:
             return False
 
         # 3. Créer un dictionnaire mémoire ultra-rapide des données actuelles
@@ -181,6 +187,17 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
                             mises_a_jour.append({
                                 'range': gspread.utils.rowcol_to_a1(ligne_gspread, gspread_col_idx),
                                 'values': [[valeur_finale]]
+                            })
+
+                    # --- Description (texte) : on remplit UNIQUEMENT les cellules vides ---
+                    if idx_description is not None:
+                        valeur_desc = row_live.get('Description')
+                        cellule_actuelle = row_data[idx_description] if len(row_data) > idx_description else ""
+                        if (pd.notna(valeur_desc) and str(valeur_desc).strip() != ""
+                                and str(cellule_actuelle).strip() == ""):
+                            mises_a_jour.append({
+                                'range': gspread.utils.rowcol_to_a1(ligne_gspread, idx_description + 1),
+                                'values': [[str(valeur_desc)]]
                             })
 
         # 5. Envoyer toutes les données d'un seul coup
@@ -304,6 +321,8 @@ def telecharger_tous_les_prix_yahoo(symboles):
 # ================================================================================
 def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeuille=None):
     df = df.copy()
+    if 'Description' not in df.columns:   # === Description : garantit que la colonne existe ===
+        df['Description'] = ""
     df['Devise'] = 'USD'
     df['Possede'] = False
     df['Pré 1an $ Yahoo'] = np.nan
@@ -361,6 +380,14 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
             nb_analystes = infos_gen.get('numberOfAnalystOpinions')
             if nb_analystes is not None:
                 df.at[index, 'Nb Analystes'] = nb_analystes
+
+            # === Description : nom de l'entreprise depuis Yahoo si la cellule est vide ===
+            # On ne remplit QUE les cases vides : toute description saisie à la main est conservée.
+            desc_existante = row.get('Description')
+            if pd.isna(desc_existante) or str(desc_existante).strip() == "":
+                nom_entreprise = infos_gen.get('longName') or infos_gen.get('shortName')
+                if nom_entreprise:
+                    df.at[index, 'Description'] = str(nom_entreprise)
 
             # === V4 : correctif dividende ===
             # yfinance renvoie selon les versions une FRACTION (0.025) ou déjà un % (2.5).
@@ -559,6 +586,24 @@ try:
     # === V4 : config réutilisable pour la colonne Nb Analystes ===
     config_nb_analystes = {"Nb Analystes": st.column_config.NumberColumn("Nb An.", format="%d")}
 
+    # === Largeur de la colonne Description, calée sur la plus longue description affichée ===
+    config_description = {}
+    if afficher_desc:
+        longueurs_desc = []
+        for d in [df_live, df_live_prospects]:
+            if 'Description' in d.columns:
+                longueurs_desc.extend(d['Description'].dropna().astype(str).map(len).tolist())
+        max_len_desc = max(longueurs_desc) if longueurs_desc else 0
+        if max_len_desc > 0:
+            # ~8 px par caractère + marge, borné entre 120 et 600 px
+            largeur_desc = int(min(max(max_len_desc * 8 + 24, 120), 600))
+            try:
+                # Streamlit récent : largeur en pixels
+                config_description = {"Description": st.column_config.TextColumn("Description", width=largeur_desc)}
+            except Exception:
+                # Anciennes versions : repli sur les paliers prédéfinis
+                config_description = {"Description": st.column_config.TextColumn("Description", width="large")}
+
     tab1, tab2, tab3 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US"])
 
     # --- ONGLET 1 : PORTEFEUILLE ---
@@ -631,6 +676,7 @@ try:
             use_container_width=False, hide_index=True, height=(len(df_live) * 35) + 43,
             column_order=colonnes_a_afficher,
             column_config={
+                **config_description,   # === largeur Description ===
                 "No.": st.column_config.NumberColumn("No.", format="%d"),
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
@@ -672,6 +718,7 @@ try:
             use_container_width=False, hide_index=True, height=(len(df_prospects_cad) * 35) + 43,
             column_order=colonnes_a_afficher_pros,
             column_config={
+                **config_description,   # === largeur Description ===
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
                 "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
@@ -705,6 +752,7 @@ try:
             use_container_width=False, hide_index=True, height=(len(df_prospects_usd) * 35) + 43,
             column_order=colonnes_a_afficher_pros_us,
             column_config={
+                **config_description,   # === largeur Description ===
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
                 "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
