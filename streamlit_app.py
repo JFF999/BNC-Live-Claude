@@ -244,8 +244,10 @@ with col_param:
 
         st.markdown("---")
         st.markdown("**Moteur de décision (v5)**")
-        afficher_signal_score = st.checkbox("Afficher Signal & Score", value=True)
-        afficher_conf_risque = st.checkbox("Afficher Confiance & Risque", value=True)
+        afficher_signal = st.checkbox("Afficher Signal", value=True)
+        afficher_score = st.checkbox("Afficher Score", value=True)
+        afficher_confiance = st.checkbox("Afficher Confiance", value=True)
+        afficher_risque = st.checkbox("Afficher Risque", value=True)
         afficher_volatilite = st.checkbox("Afficher Volatilité", value=False)
 
         st.markdown("---")
@@ -734,12 +736,10 @@ try:
     colonnes_base_port.append("Gain $")
     colonnes_base_port.append("Gain %")
 
-    if afficher_signal_score:
-        colonnes_base_port.append("Signal")
-        colonnes_base_port.append("Score")
-    if afficher_conf_risque:
-        colonnes_base_port.append("Confiance")
-        colonnes_base_port.append("Risque")
+    if afficher_signal: colonnes_base_port.append("Signal")
+    if afficher_score: colonnes_base_port.append("Score")
+    if afficher_confiance: colonnes_base_port.append("Confiance")
+    if afficher_risque: colonnes_base_port.append("Risque")
 
     if afficher_var: colonnes_base_port.append("Var %")
     if afficher_tendance: colonnes_base_port.append("Tendance")
@@ -754,12 +754,10 @@ try:
     colonnes_base_pros = []
     colonnes_base_pros.append("Symbole")
     if afficher_desc: colonnes_base_pros.append("Description")
-    if afficher_signal_score:
-        colonnes_base_pros.append("Signal")
-        colonnes_base_pros.append("Score")
-    if afficher_conf_risque:
-        colonnes_base_pros.append("Confiance")
-        colonnes_base_pros.append("Risque")
+    if afficher_signal: colonnes_base_pros.append("Signal")
+    if afficher_score: colonnes_base_pros.append("Score")
+    if afficher_confiance: colonnes_base_pros.append("Confiance")
+    if afficher_risque: colonnes_base_pros.append("Risque")
     if afficher_dev: colonnes_base_pros.append("Dev.")
     if afficher_compte: colonnes_base_pros.append("Compte")
     colonnes_base_pros.append("Prix $")
