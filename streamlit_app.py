@@ -479,6 +479,22 @@ def surligner_prospects(row):
     if row.get('Possede') == True: return ['background-color: rgba(255, 215, 0, 0.4)'] * len(row)
     return [''] * len(row)
 
+def config_largeur_description(df, afficher):
+    # Largeur MINIMALE de la colonne Description, calée sur la plus longue description
+    # RÉELLEMENT affichée dans CET onglet (optimise l'espace onglet par onglet).
+    if not afficher or 'Description' not in df.columns:
+        return {}
+    longueurs = df['Description'].dropna().astype(str).map(len)
+    max_len = int(longueurs.max()) if len(longueurs) > 0 else 0
+    if max_len <= 0:
+        return {}
+    # ~8 px par caractère + marge, borné entre 120 et 600 px
+    largeur = int(min(max(max_len * 8 + 24, 120), 600))
+    try:
+        return {"Description": st.column_config.TextColumn("Description", width=largeur)}
+    except Exception:
+        return {"Description": st.column_config.TextColumn("Description", width="large")}
+
 try:
     with st.spinner("Connexion à Google Sheets..."):
         df_base_portefeuille = charger_donnees_base('Portefeuille BNC')
@@ -586,23 +602,7 @@ try:
     # === V4 : config réutilisable pour la colonne Nb Analystes ===
     config_nb_analystes = {"Nb Analystes": st.column_config.NumberColumn("Nb An.", format="%d")}
 
-    # === Largeur de la colonne Description, calée sur la plus longue description affichée ===
-    config_description = {}
-    if afficher_desc:
-        longueurs_desc = []
-        for d in [df_live, df_live_prospects]:
-            if 'Description' in d.columns:
-                longueurs_desc.extend(d['Description'].dropna().astype(str).map(len).tolist())
-        max_len_desc = max(longueurs_desc) if longueurs_desc else 0
-        if max_len_desc > 0:
-            # ~8 px par caractère + marge, borné entre 120 et 600 px
-            largeur_desc = int(min(max(max_len_desc * 8 + 24, 120), 600))
-            try:
-                # Streamlit récent : largeur en pixels
-                config_description = {"Description": st.column_config.TextColumn("Description", width=largeur_desc)}
-            except Exception:
-                # Anciennes versions : repli sur les paliers prédéfinis
-                config_description = {"Description": st.column_config.TextColumn("Description", width="large")}
+    # === Largeur de la colonne Description : calculée par onglet (voir config_largeur_description) ===
 
     tab1, tab2, tab3 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US"])
 
@@ -670,6 +670,7 @@ try:
         df_live = df_live.sort_values(by="Pré G %" if colonne_tri == "Pré G %" else "Gain %", ascending=(colonne_tri == "Pré G %"))
 
         colonnes_a_afficher = [c for c in colonnes_base_port if c in df_live.columns]
+        config_description = config_largeur_description(df_live, afficher_desc)
 
         st.dataframe(
             df_live.style.map(couleur_alerte_vente, subset=['Pré G %']).map(couleur_var, subset=['Var %'] if afficher_var else []),
@@ -712,6 +713,7 @@ try:
             df_prospects_cad = df_prospects_cad[(df_prospects_cad["Pré G %"].notna()) & (df_prospects_cad["Pré G %"] >= min_cad) & (df_prospects_cad["Pré G %"] <= max_cad)].sort_values(by="Pré G %", ascending=False)
 
         colonnes_a_afficher_pros = [c for c in colonnes_base_pros if c in df_prospects_cad.columns]
+        config_description = config_largeur_description(df_prospects_cad, afficher_desc)
 
         st.dataframe(
             df_prospects_cad.style.apply(surligner_prospects, axis=1).map(couleur_var, subset=['Var %'] if afficher_var else []),
@@ -746,6 +748,7 @@ try:
             df_prospects_usd = df_prospects_usd[(df_prospects_usd["Pré G %"].notna()) & (df_prospects_usd["Pré G %"] >= min_us) & (df_prospects_usd["Pré G %"] <= max_us)].sort_values(by="Pré G %", ascending=False)
 
         colonnes_a_afficher_pros_us = [c for c in colonnes_base_pros if c in df_prospects_usd.columns]
+        config_description = config_largeur_description(df_prospects_usd, afficher_desc)
 
         st.dataframe(
             df_prospects_usd.style.apply(surligner_prospects, axis=1).map(couleur_var, subset=['Var %'] if afficher_var else []),
