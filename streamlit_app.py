@@ -479,6 +479,32 @@ def surligner_prospects(row):
     if row.get('Possede') == True: return ['background-color: rgba(255, 215, 0, 0.4)'] * len(row)
     return [''] * len(row)
 
+def calculer_priorite(df):
+    # Signal de priorité d'un prospect, en étoiles (1 à 5), combinant :
+    #   - Potentiel de gain (Pré G %)   : poids 50 %  -> 0 % = 0, 100 %+ = max
+    #   - Proximité du creux 52 sem.    : poids 30 %  -> au creux = max, au sommet = 0
+    #   - Fiabilité (Nb analystes)      : poids 20 %  -> 0 = 0, 20+ analystes = max
+    # Échelles ABSOLUES : le score reste stable quel que soit le filtrage Min/Max.
+    df = df.copy()
+    if 'Pré G %' not in df.columns:
+        df['Priorité'] = ""
+        return df
+
+    preg = pd.to_numeric(df.get('Pré G %'), errors='coerce')
+    chaleur = pd.to_numeric(df.get('Chaleur 52s'), errors='coerce')
+    nb = pd.to_numeric(df.get('Nb Analystes'), errors='coerce')
+
+    score_gain = (preg / 100.0).clip(0, 1).fillna(0)            # 0 % -> 0 ; 100 %+ -> 1
+    score_creux = ((100.0 - chaleur) / 100.0).clip(0, 1).fillna(0.5)  # manquant = neutre
+    score_fiab = (nb / 20.0).clip(0, 1).fillna(0)               # 0 ou manquant -> 0
+
+    score = 0.5 * score_gain + 0.3 * score_creux + 0.2 * score_fiab
+
+    # Score 0..1 -> 1 à 5 étoiles
+    etoiles = (score * 4 + 1).round().clip(1, 5)
+    df['Priorité'] = etoiles.map(lambda n: "⭐" * int(n) if pd.notna(n) else "")
+    return df
+
 def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, largeur_max=600):
     # Largeur MINIMALE de la colonne Description, calée sur la plus longue description
     # RÉELLEMENT affichée dans CET onglet (optimise l'espace onglet par onglet).
@@ -527,6 +553,9 @@ try:
     df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes)  # === V4 ===
     for col in ["Pré G %", "Var %"]:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
+
+    # === Signal de priorité (Pros uniquement), calculé une fois pour les deux onglets ===
+    df_live_prospects = calculer_priorite(df_live_prospects)
 
     if afficher_bandeau:
         indices_marches = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "TSX": "^GSPTSE"}
@@ -587,6 +616,7 @@ try:
     # On utilise la même logique d'affichage de base pour les prospects
     colonnes_base_pros = []
     colonnes_base_pros.append("Symbole")
+    colonnes_base_pros.append("Priorité")   # signal de priorité (étoiles), bien visible
     if afficher_desc: colonnes_base_pros.append("Description")
     if afficher_dev: colonnes_base_pros.append("Dev.")
     if afficher_compte: colonnes_base_pros.append("Compte")
@@ -721,6 +751,7 @@ try:
             column_order=colonnes_a_afficher_pros,
             column_config={
                 **config_description,   # === largeur Description ===
+                "Priorité": st.column_config.TextColumn("⭐ Prio", width="small"),
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
                 "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
@@ -756,6 +787,7 @@ try:
             column_order=colonnes_a_afficher_pros_us,
             column_config={
                 **config_description,   # === largeur Description ===
+                "Priorité": st.column_config.TextColumn("⭐ Prio", width="small"),
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
                 "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
