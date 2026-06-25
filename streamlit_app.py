@@ -970,8 +970,26 @@ try:
     with tab4:
         st.markdown(
             """
-            ### 🎯 Score (0–100)
-            Le **Score** combine plusieurs facteurs, le **potentiel de gain restant le principal** :
+            ## 💰 Onglet Portefeuille — Signal de VENTE
+            Pour un titre que tu **détiens déjà**, la colonne **Signal** indique quoi en faire,
+            selon le **potentiel restant** (Pré G %) :
+
+            | Signal | Condition | Idée |
+            |---|---|---|
+            | 🔴 **Vendre** | potentiel ≤ 5 % | objectif quasi atteint, peu de hausse restante |
+            | 🟡 **À surveiller** | 5 % < potentiel < 15 % | se rapproche de l'objectif |
+            | 🟢 **Attendre** | potentiel ≥ 15 % | belle marge de hausse, on conserve |
+
+            *Les seuils et couleurs sont alignés sur la colonne Pré G %. Score / Confiance /
+            Risque ne sont pas affichés dans le Portefeuille (ils servent à choisir quoi
+            **acheter**, pas quoi vendre).*
+
+            ---
+            ## 🎯 Onglets Prospects — Score d'ACHAT
+            Pour un titre que tu envisages d'**acheter**, on calcule trois indices.
+
+            ### Score (0–100)
+            Combine plusieurs facteurs, le **potentiel de gain restant le principal** :
 
             | Facteur | Échelle | Poids |
             |---|---|---|
@@ -994,7 +1012,7 @@ try:
             Monte avec la **volatilité**, la **proximité du sommet 52 sem.**, un **objectif déjà
             atteint** (potentiel négatif) et une **faible confiance**.
 
-            ### 🏷️ Signal
+            ### 🏷️ Signal (achat)
             Étiquette lisible déduite des trois indices :
             - **Priorité** : Score ≥ 75 et Confiance ≥ 60
             - **À surveiller** : Score ≥ 60
