@@ -1,3 +1,4 @@
+import math
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +9,9 @@ from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="Portefeuille BNC", layout="wide")
+
+# Catégories de signal (du plus fort au plus faible)
+SIGNAUX = ["Priorité", "À surveiller", "À valider", "Risque élevé", "Secondaire", "Objectif atteint"]
 
 # --- ASTUCE CSS : Optimisation totale de l'espace sur mobile ---
 st.markdown("""
@@ -38,14 +42,6 @@ st.markdown("""
         }
         div[data-testid="stHorizontalBlock"]:has(div.market-block) > div {
             width: auto !important; min-width: 0 !important; flex: none !important;
-        }
-
-        /* Ajustement largeur minimale pour les cases Min % et Max % */
-        div[data-testid="stHorizontalBlock"]:has(div[data-testid="stNumberInput"]) {
-            flex-direction: row !important; flex-wrap: nowrap !important; gap: 15px !important;
-        }
-        div[data-testid="stHorizontalBlock"]:has(div[data-testid="stNumberInput"]) > div {
-            width: auto !important; min-width: 110px !important; flex: none !important;
         }
 
         .alert-box {
@@ -221,7 +217,7 @@ def preparer_export_csv(df):
     return df_export.to_csv(index=False, sep=';').encode('utf-8-sig')
 
 # --- TITRE PRINCIPAL ---
-st.title("📈 BNC LIVE v4 Claude")
+st.title("📈 BNC LIVE v5 Claude")
 
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
@@ -241,10 +237,16 @@ with col_param:
         afficher_compte = st.checkbox("Afficher Compte", value=False)
 
         afficher_var = st.checkbox("Afficher Var %", value=True)
-        afficher_tendance = st.checkbox("Afficher Tendance (5j)", value=False)
+        afficher_tendance = st.checkbox("Afficher Tendance (1m)", value=False)
         afficher_chaleur = st.checkbox("Afficher Chaleur 52 sem.", value=False)
         afficher_div = st.checkbox("Afficher Dividendes (Div %)", value=False)
         afficher_analystes = st.checkbox("Afficher Nb d'analystes", value=False)  # === V4 ===
+
+        st.markdown("---")
+        st.markdown("**Moteur de décision (v5)**")
+        afficher_signal_score = st.checkbox("Afficher Signal & Score", value=True)
+        afficher_conf_risque = st.checkbox("Afficher Confiance & Risque", value=True)
+        afficher_volatilite = st.checkbox("Afficher Volatilité", value=False)
 
         st.markdown("---")
         st.markdown("**Fonctionnalités Avancées**")
@@ -273,6 +275,7 @@ with col_btn:
 #            intermittents dans Pré 1an / Div % / Chaleur 52s.
 # Maintenant :
 #   1) PRIX & HISTORIQUE : un SEUL appel groupé yf.download() pour tous les symboles.
+#                          === v5 : période 1 mois (au lieu de 5j) pour la volatilité.
 #   2) INFOS (.info)     : appel plus lourd, donc moins de threads (4 au lieu de 10)
 #                          pour réduire fortement le risque de blocage.
 # L'interface de sortie reste identique : { sym: {'hist': df, 'info': dict} }
@@ -285,7 +288,7 @@ def telecharger_tous_les_prix_yahoo(symboles):
     # --- 1) PRIX & HISTORIQUE : un seul appel groupé (rapide, robuste) ---
     try:
         data = yf.download(
-            symboles, period="5d", interval="1d",
+            symboles, period="1mo", interval="1d",  # === v5 : 5d -> 1mo (volatilité) ===
             group_by="ticker", threads=True, progress=False, auto_adjust=True
         )
         for sym in symboles:
@@ -329,6 +332,8 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
     df['Chaleur 52s'] = np.nan
     df['Div %'] = np.nan
     df['Nb Analystes'] = np.nan  # === V4 ===
+    df['Volatilité 1m'] = np.nan  # === v5 ===
+    df['Données OK'] = False       # === v5 : prix bien récupéré ? ===
     df['Gain Jour $'] = 0.0
     df['Symbole Brut'] = ""
     tendances = []
@@ -355,13 +360,20 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
             prix_actuel = None
 
             if not infos.empty and len(infos) >= 2:
-                prix_actuel = infos['Close'].iloc[-1]
-                prix_veille = infos['Close'].iloc[-2]
+                serie_close = infos['Close'].dropna()
+                prix_actuel = serie_close.iloc[-1]
+                prix_veille = serie_close.iloc[-2]
 
                 df.at[index, 'Prix $'] = prix_actuel
                 df.at[index, 'Var %'] = (prix_actuel - prix_veille) / prix_veille
+                df.at[index, 'Données OK'] = True
 
-                tendances.append(infos['Close'].tolist())
+                tendances.append(serie_close.tolist())
+
+                # === v5 : volatilité annualisée (écart-type des rendements * sqrt(252)) ===
+                rendements = serie_close.pct_change().dropna()
+                if len(rendements) >= 5:
+                    df.at[index, 'Volatilité 1m'] = float(rendements.std() * math.sqrt(252) * 100)
 
                 if est_portefeuille and 'Achat $' in row and pd.notna(row['Achat $']) and str(row['Achat $']).strip() != "":
                     achat = float(row['Achat $'])
@@ -463,6 +475,112 @@ def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0):
 
     return df
 
+# === v5 : MOTEUR DE DÉCISION (Score / Confiance / Risque / Signal) ==============
+# Inspiré de la version Codex, mais CORRIGÉ : on calcule sur des valeurs déjà en %
+# (Pré G %, Var %, Div %, Volatilité, Chaleur), donc les seuils ci-dessous ont du
+# sens. De plus, le Score est normalisé par les POIDS DISPONIBLES : une donnée
+# manquante ne tire pas le score vers le bas, elle est simplement ignorée.
+# ================================================================================
+def pct_vers_points(valeur, bas, haut):
+    """Convertit une valeur en note 0..100 selon une échelle [bas, haut]."""
+    if pd.isna(valeur):
+        return np.nan
+    if haut == bas:
+        return 0.0
+    return float(np.clip((valeur - bas) / (haut - bas) * 100, 0, 100))
+
+def classifier_signal(score, confiance, risque, potentiel):
+    if pd.isna(score):
+        return "Données insuffisantes"
+    if confiance < 45:
+        return "À valider"
+    if risque >= 75 and score < 80:
+        return "Risque élevé"
+    if pd.notna(potentiel) and potentiel <= 0:
+        return "Objectif atteint"
+    if score >= 75 and confiance >= 60:
+        return "Priorité"
+    if score >= 60:
+        return "À surveiller"
+    return "Secondaire"
+
+def calculer_score_decision(df):
+    df = df.copy()
+
+    potentiel = pd.to_numeric(df.get("Pré G %"), errors="coerce")     # en %
+    chaleur = pd.to_numeric(df.get("Chaleur 52s"), errors="coerce")   # 0..100
+    dividende = pd.to_numeric(df.get("Div %"), errors="coerce")       # en %
+    volatilite = pd.to_numeric(df.get("Volatilité 1m"), errors="coerce")  # en %
+    var_jour = pd.to_numeric(df.get("Var %"), errors="coerce")        # en %
+    yahoo = pd.to_numeric(df.get("Pré YF Display"), errors="coerce")  # cible $ Yahoo
+    affaires = pd.to_numeric(df.get("Pré Aff Display"), errors="coerce")  # cible $ Affaires
+
+    donnees_ok = df.get("Données OK")
+    if donnees_ok is None:
+        donnees_ok = pd.Series(False, index=df.index)
+
+    # --- Composantes du score (0..100) ---
+    pts_potentiel = potentiel.apply(lambda v: pct_vers_points(v, 0, 80))
+    pts_creux = chaleur.apply(lambda v: 100 - pct_vers_points(v, 0, 100) if pd.notna(v) else np.nan)
+    pts_div = dividende.apply(lambda v: pct_vers_points(v, 0, 6))
+    pts_momentum = var_jour.apply(lambda v: pct_vers_points(v, -5, 5))
+    penalite_vol = volatilite.apply(lambda v: pct_vers_points(v, 15, 80))
+
+    composantes = pd.DataFrame({
+        "potentiel": pts_potentiel,
+        "creux": pts_creux,
+        "div": pts_div,
+        "momentum": pts_momentum,
+    })
+    somme_ponderee = (
+        composantes["potentiel"].fillna(0) * 0.50
+        + composantes["creux"].fillna(0) * 0.18
+        + composantes["div"].fillna(0) * 0.12
+        + composantes["momentum"].fillna(50) * 0.08
+        + (100 - penalite_vol.fillna(50)) * 0.12
+    )
+    # Normalisation par les poids RÉELLEMENT disponibles (clé de la robustesse).
+    # Momentum ET volatilité sont TOUJOURS comptés (défaut neutre 50) : leur valeur
+    # par défaut est ajoutée au numérateur, donc leur poids doit l'être au dénominateur
+    # — sinon le score peut dépasser 100 quand presque tout est manquant.
+    poids_disponible = (
+        composantes["potentiel"].notna() * 0.50
+        + composantes["creux"].notna() * 0.18
+        + composantes["div"].notna() * 0.12
+        + 0.08  # momentum : toujours compté (défaut neutre 50)
+        + 0.12  # volatilité : toujours comptée (défaut neutre 50)
+    )
+    df["Score"] = np.where(poids_disponible > 0, somme_ponderee / poids_disponible, np.nan)
+
+    # --- Confiance : complétude des données + accord des cibles ---
+    confiance = pd.Series(20.0, index=df.index)
+    confiance += donnees_ok.astype(bool) * 20
+    confiance += yahoo.notna() * 20
+    confiance += affaires.notna() * 15
+    confiance += chaleur.notna() * 10
+    confiance += volatilite.notna() * 10
+    confiance += dividende.notna() * 5
+
+    deux_cibles = yahoo.notna() & affaires.notna() & (yahoo > 0) & (affaires > 0)
+    desaccord = (abs(yahoo - affaires) / pd.concat([yahoo, affaires], axis=1).mean(axis=1)).where(deux_cibles)
+    confiance -= desaccord.fillna(0).clip(0, 1) * 25
+    df["Confiance"] = confiance.clip(0, 100)
+
+    # --- Risque : volatilité + proximité du sommet 52s + cible atteinte + faible confiance ---
+    risque = pd.Series(30.0, index=df.index)
+    risque += volatilite.apply(lambda v: pct_vers_points(v, 20, 90)).fillna(25) * 0.45
+    risque += chaleur.apply(lambda v: pct_vers_points(v, 70, 100)).fillna(15) * 0.25
+    risque += potentiel.apply(lambda v: 25 if pd.notna(v) and v < 0 else 0)
+    risque += df["Confiance"].apply(lambda v: pct_vers_points(60 - v, 0, 60)).fillna(0) * 0.25
+    df["Risque"] = risque.clip(0, 100)
+
+    df["Signal"] = [
+        classifier_signal(s, c, r, p)
+        for s, c, r, p in zip(df["Score"], df["Confiance"], df["Risque"], potentiel)
+    ]
+
+    return df
+
 def couleur_var(valeur):
     if pd.isna(valeur): return ''
     if valeur > 0: return 'color: #00cc00;'
@@ -475,37 +593,19 @@ def couleur_alerte_vente(valeur):
     elif valeur < 15: return 'background-color: rgba(255, 255, 0, 0.3)'
     else: return 'background-color: rgba(0, 255, 0, 0.3)'
 
+def couleur_signal(valeur):
+    couleurs = {
+        "Priorité": "background-color: rgba(0, 166, 90, .22);",
+        "À surveiller": "background-color: rgba(106, 169, 255, .20);",
+        "À valider": "background-color: rgba(255, 209, 102, .25);",
+        "Risque élevé": "background-color: rgba(217, 75, 75, .22);",
+        "Objectif atteint": "background-color: rgba(127, 127, 127, .18);",
+    }
+    return couleurs.get(valeur, "")
+
 def surligner_prospects(row):
     if row.get('Possede') == True: return ['background-color: rgba(255, 215, 0, 0.4)'] * len(row)
     return [''] * len(row)
-
-def calculer_priorite(df):
-    # Signal de priorité d'un prospect, en étoiles (1 à 5), combinant :
-    #   - Potentiel de gain (Pré G %)   : poids 50 %  -> 0 % = 0, 100 %+ = max
-    #   - Proximité du creux 52 sem.    : poids 30 %  -> au creux = max, au sommet = 0
-    #   - Fiabilité (Nb analystes)      : poids 20 %  -> 0 = 0, 20+ analystes = max
-    # Échelles ABSOLUES : le score reste stable quel que soit le filtrage Min/Max.
-    df = df.copy()
-    if 'Pré G %' not in df.columns:
-        df['Priorité'] = ""
-        df['Priorité Score'] = 0.0
-        return df
-
-    preg = pd.to_numeric(df.get('Pré G %'), errors='coerce')
-    chaleur = pd.to_numeric(df.get('Chaleur 52s'), errors='coerce')
-    nb = pd.to_numeric(df.get('Nb Analystes'), errors='coerce')
-
-    score_gain = (preg / 100.0).clip(0, 1).fillna(0)            # 0 % -> 0 ; 100 %+ -> 1
-    score_creux = ((100.0 - chaleur) / 100.0).clip(0, 1).fillna(0.5)  # manquant = neutre
-    score_fiab = (nb / 20.0).clip(0, 1).fillna(0)               # 0 ou manquant -> 0
-
-    score = 0.5 * score_gain + 0.3 * score_creux + 0.2 * score_fiab
-    df['Priorité Score'] = score   # score continu (caché) pour le tri
-
-    # Score 0..1 -> 1 à 5 étoiles
-    etoiles = (score * 4 + 1).round().clip(1, 5)
-    df['Priorité'] = etoiles.map(lambda n: "⭐" * int(n) if pd.notna(n) else "")
-    return df
 
 def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, largeur_max=600):
     # Largeur MINIMALE de la colonne Description, calée sur la plus longue description
@@ -522,6 +622,32 @@ def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, lar
         return {"Description": st.column_config.TextColumn("Description", width=largeur)}
     except Exception:
         return {"Description": st.column_config.TextColumn("Description", width="large")}
+
+def config_colonnes_communes():
+    # Configuration d'affichage partagée par tous les tableaux (idée reprise de Codex).
+    return {
+        "No.": st.column_config.NumberColumn("No.", format="%d"),
+        "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
+        "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
+        "Prix $": st.column_config.NumberColumn("Prix", format="$ %.2f"),
+        "Achat $": st.column_config.NumberColumn("Achat", format="$ %.2f"),
+        "Gain $": st.column_config.NumberColumn("Gain $", format="$ %.2f"),
+        "Gain %": st.column_config.NumberColumn("Gain %", format="%.1f %%"),
+        "Var %": st.column_config.NumberColumn("Var %", format="%.1f %%"),
+        "Pré G %": st.column_config.NumberColumn("Pré G %", format="%.1f %%"),
+        "Pré YF Display": st.column_config.NumberColumn("Pré YF", format="$ %.2f"),
+        "Pré Aff Display": st.column_config.NumberColumn("Pré Aff", format="$ %.2f"),
+        "Tendance": st.column_config.LineChartColumn("Tendance (1m)"),
+        "Chaleur 52s": st.column_config.ProgressColumn("♨️ 52 sem.", format="%.0f %%", min_value=0, max_value=100),
+        "Div %": st.column_config.NumberColumn("Div %", format="%.2f %%"),
+        "Volatilité 1m": st.column_config.NumberColumn("Volat.", format="%.1f %%"),
+        "Nb Analystes": st.column_config.NumberColumn("Nb An.", format="%d"),
+        "Score": st.column_config.ProgressColumn("Score", format="%.0f", min_value=0, max_value=100),
+        "Confiance": st.column_config.ProgressColumn("Conf.", format="%.0f", min_value=0, max_value=100),
+        "Risque": st.column_config.ProgressColumn("Risque", format="%.0f", min_value=0, max_value=100),
+        "Signal": st.column_config.TextColumn("Signal", width="small"),
+        "Date Achat": st.column_config.DatetimeColumn("Date Achat", format="YYYY-MM-DD"),
+    }
 
 try:
     with st.spinner("Connexion à Google Sheets..."):
@@ -550,14 +676,13 @@ try:
     df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes)  # === V4 ===
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
+    df_live = calculer_score_decision(df_live)  # === v5 : après conversion en % ===
 
     df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes)
     df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes)  # === V4 ===
     for col in ["Pré G %", "Var %"]:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
-
-    # === Signal de priorité (Pros uniquement), calculé une fois pour les deux onglets ===
-    df_live_prospects = calculer_priorite(df_live_prospects)
+    df_live_prospects = calculer_score_decision(df_live_prospects)  # === v5 ===
 
     if afficher_bandeau:
         indices_marches = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "TSX": "^GSPTSE"}
@@ -587,6 +712,8 @@ try:
         if not df_live_prospects.empty:
             for _, row in df_live_prospects.iterrows():
                 sym = row.get('Symbole Brut', 'Action')
+                if row.get('Signal') == "Priorité":
+                    alertes_generees.append(f"⭐ **{sym}** (Prospect) ressort en PRIORITÉ.")
                 if pd.notna(row.get('Chaleur 52s')) and row['Chaleur 52s'] <= 5.0:
                     alertes_generees.append(f"🔥 **{sym}** (Prospect) est au plus bas sur 1 an !")
         if alertes_generees:
@@ -607,10 +734,18 @@ try:
     colonnes_base_port.append("Gain $")
     colonnes_base_port.append("Gain %")
 
+    if afficher_signal_score:
+        colonnes_base_port.append("Signal")
+        colonnes_base_port.append("Score")
+    if afficher_conf_risque:
+        colonnes_base_port.append("Confiance")
+        colonnes_base_port.append("Risque")
+
     if afficher_var: colonnes_base_port.append("Var %")
     if afficher_tendance: colonnes_base_port.append("Tendance")
     if afficher_chaleur: colonnes_base_port.append("Chaleur 52s")
     if afficher_div: colonnes_base_port.append("Div %")
+    if afficher_volatilite: colonnes_base_port.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_port.append("Nb Analystes")  # === V4 ===
 
     colonnes_base_port.extend(["Pré YF Display", "Pré Aff Display", "Pré G %", "Achat $", "Qtée", "Date Achat"])
@@ -618,25 +753,27 @@ try:
     # On utilise la même logique d'affichage de base pour les prospects
     colonnes_base_pros = []
     colonnes_base_pros.append("Symbole")
-    colonnes_base_pros.append("Priorité")   # signal de priorité (étoiles), bien visible
     if afficher_desc: colonnes_base_pros.append("Description")
+    if afficher_signal_score:
+        colonnes_base_pros.append("Signal")
+        colonnes_base_pros.append("Score")
+    if afficher_conf_risque:
+        colonnes_base_pros.append("Confiance")
+        colonnes_base_pros.append("Risque")
     if afficher_dev: colonnes_base_pros.append("Dev.")
     if afficher_compte: colonnes_base_pros.append("Compte")
     colonnes_base_pros.append("Prix $")
 
     if afficher_var: colonnes_base_pros.append("Var %")
+    colonnes_base_pros.append("Pré G %")
     if afficher_tendance: colonnes_base_pros.append("Tendance")
     if afficher_chaleur: colonnes_base_pros.append("Chaleur 52s")
     if afficher_div: colonnes_base_pros.append("Div %")
+    if afficher_volatilite: colonnes_base_pros.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_pros.append("Nb Analystes")  # === V4 ===
-    colonnes_base_pros.extend(["Pré YF Display", "Pré Aff Display", "Pré G %"])
+    colonnes_base_pros.extend(["Pré YF Display", "Pré Aff Display"])
 
-    # === V4 : config réutilisable pour la colonne Nb Analystes ===
-    config_nb_analystes = {"Nb Analystes": st.column_config.NumberColumn("Nb An.", format="%d")}
-
-    # === Largeur de la colonne Description : calculée par onglet (voir config_largeur_description) ===
-
-    tab1, tab2, tab3 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US"])
+    tab1, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
 
     # --- ONGLET 1 : PORTEFEUILLE ---
     with tab1:
@@ -697,33 +834,30 @@ try:
             st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
 
         with cols_s[idx_tri]:
-            colonne_tri = st.selectbox("Tri", ["Pré G %", "Gain %"], key="tri_portefeuille", label_visibility="collapsed")
+            colonne_tri = st.selectbox("Tri", ["Score", "Pré G %", "Gain %", "Risque"], key="tri_portefeuille", label_visibility="collapsed")
 
-        df_live = df_live.sort_values(by="Pré G %" if colonne_tri == "Pré G %" else "Gain %", ascending=(colonne_tri == "Pré G %"))
+        # Pré G % se trie en ordre CROISSANT (titres proches/au-dessus de l'objectif = à surveiller en haut).
+        if colonne_tri == "Pré G %":
+            df_live = df_live.sort_values(by="Pré G %", ascending=True, na_position="last")
+        else:
+            df_live = df_live.sort_values(by=colonne_tri, ascending=False, na_position="last")
 
         colonnes_a_afficher = [c for c in colonnes_base_port if c in df_live.columns]
         config_description = config_largeur_description(df_live, afficher_desc)
 
+        styled_port = df_live.style
+        if 'Pré G %' in df_live.columns:
+            styled_port = styled_port.map(couleur_alerte_vente, subset=['Pré G %'])
+        if afficher_var and 'Var %' in df_live.columns:
+            styled_port = styled_port.map(couleur_var, subset=['Var %'])
+        if 'Signal' in df_live.columns:
+            styled_port = styled_port.map(couleur_signal, subset=['Signal'])
+
         st.dataframe(
-            df_live.style.map(couleur_alerte_vente, subset=['Pré G %']).map(couleur_var, subset=['Var %'] if afficher_var else []),
+            styled_port,
             use_container_width=False, hide_index=True, height=(len(df_live) * 35) + 43,
             column_order=colonnes_a_afficher,
-            column_config={
-                **config_description,   # === largeur Description ===
-                "No.": st.column_config.NumberColumn("No.", format="%d"),
-                "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
-                "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
-                "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
-                "Var %": st.column_config.NumberColumn(format="%.1f %%"), "Tendance": st.column_config.LineChartColumn("Tendance (5j)"),
-                "Chaleur 52s": st.column_config.ProgressColumn("♨️ 52 sem.", format="%.0f %%", min_value=0, max_value=100),
-                "Div %": st.column_config.NumberColumn("Div %", format="%.2f %%"),
-                **config_nb_analystes,  # === V4 ===
-                "Pré YF Display": st.column_config.NumberColumn("Pré YF", format="$ %.2f"),
-                "Pré Aff Display": st.column_config.NumberColumn("Pré Aff", format="$ %.2f"),
-                "Achat $": st.column_config.NumberColumn(format="$ %.2f"),
-                "Gain %": st.column_config.NumberColumn(format="%.1f %%"), "Gain $": st.column_config.NumberColumn(format="$ %.2f"),
-                "Date Achat": st.column_config.DatetimeColumn(format="YYYY-MM-DD")
-            }
+            column_config={**config_description, **config_colonnes_communes()}
         )
 
         col_save, col_exp = st.columns(2)
@@ -736,34 +870,36 @@ try:
 
     # --- ONGLET 2 : PROSPECTS CAD ---
     with tab2:
-        col_min, col_max, _ = st.columns([1, 1, 2])
-        min_cad = col_min.number_input("Min %", min_value=-100, max_value=500, value=25, step=5, key="min_cad")
-        max_cad = col_max.number_input("Max %", min_value=-100, max_value=500, value=100, step=5, key="max_cad")
+        col_min, col_max, col_sig = st.columns([1, 1, 2])
+        min_score_cad = col_min.number_input("Score min", min_value=0, max_value=100, value=55, step=5, key="cad_min_score")
+        max_risque_cad = col_max.number_input("Risque max", min_value=0, max_value=100, value=85, step=5, key="cad_max_risk")
+        filtre_signal_cad = col_sig.multiselect(
+            "Signaux", SIGNAUX,
+            default=["Priorité", "À surveiller", "À valider"], key="cad_signal_filter"
+        )
 
-        df_prospects_cad = df_live_prospects[df_live_prospects['Devise'] == 'CAD']
-        if "Pré G %" in df_prospects_cad.columns:
-            df_prospects_cad = df_prospects_cad[(df_prospects_cad["Pré G %"].notna()) & (df_prospects_cad["Pré G %"] >= min_cad) & (df_prospects_cad["Pré G %"] <= max_cad)].sort_values(by=["Priorité Score", "Pré G %"], ascending=[False, False])
+        df_prospects_cad = df_live_prospects[df_live_prospects['Devise'] == 'CAD'].copy()
+        if "Score" in df_prospects_cad.columns:
+            df_prospects_cad = df_prospects_cad[
+                df_prospects_cad["Score"].fillna(0).ge(min_score_cad)
+                & df_prospects_cad["Risque"].fillna(100).le(max_risque_cad)
+                & df_prospects_cad["Signal"].isin(filtre_signal_cad)
+            ].sort_values(by=["Score", "Confiance"], ascending=[False, False], na_position="last")
 
         colonnes_a_afficher_pros = [c for c in colonnes_base_pros if c in df_prospects_cad.columns]
         config_description = config_largeur_description(df_prospects_cad, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
 
+        styled_cad = df_prospects_cad.style.apply(surligner_prospects, axis=1)
+        if afficher_var and 'Var %' in df_prospects_cad.columns:
+            styled_cad = styled_cad.map(couleur_var, subset=['Var %'])
+        if 'Signal' in df_prospects_cad.columns:
+            styled_cad = styled_cad.map(couleur_signal, subset=['Signal'])
+
         st.dataframe(
-            df_prospects_cad.style.apply(surligner_prospects, axis=1).map(couleur_var, subset=['Var %'] if afficher_var else []),
+            styled_cad,
             use_container_width=False, hide_index=True, height=(len(df_prospects_cad) * 35) + 43,
             column_order=colonnes_a_afficher_pros,
-            column_config={
-                **config_description,   # === largeur Description ===
-                "Priorité": st.column_config.TextColumn("Priorité", width=110),
-                "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
-                "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
-                "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
-                "Var %": st.column_config.NumberColumn(format="%.1f %%"), "Tendance": st.column_config.LineChartColumn("Tendance (5j)"),
-                "Chaleur 52s": st.column_config.ProgressColumn("♨️ 52 sem.", format="%.0f %%", min_value=0, max_value=100),
-                "Div %": st.column_config.NumberColumn("Div %", format="%.2f %%"),
-                **config_nb_analystes,  # === V4 ===
-                "Pré YF Display": st.column_config.NumberColumn("Pré YF", format="$ %.2f"),
-                "Pré Aff Display": st.column_config.NumberColumn("Pré Aff", format="$ %.2f")
-            }
+            column_config={**config_description, **config_colonnes_communes()}
         )
 
         if st.button("💾 Sauvegarder les données Prospects CAD (Sheets)"):
@@ -772,39 +908,84 @@ try:
 
     # --- ONGLET 3 : PROSPECTS US ---
     with tab3:
-        col_min_us, col_max_us, _ = st.columns([1, 1, 2])
-        min_us = col_min_us.number_input("Min %", min_value=-100, max_value=500, value=25, step=5, key="min_us")
-        max_us = col_max_us.number_input("Max %", min_value=-100, max_value=500, value=100, step=5, key="max_us")
+        col_min_us, col_max_us, col_sig_us = st.columns([1, 1, 2])
+        min_score_us = col_min_us.number_input("Score min", min_value=0, max_value=100, value=55, step=5, key="usd_min_score")
+        max_risque_us = col_max_us.number_input("Risque max", min_value=0, max_value=100, value=85, step=5, key="usd_max_risk")
+        filtre_signal_us = col_sig_us.multiselect(
+            "Signaux", SIGNAUX,
+            default=["Priorité", "À surveiller", "À valider"], key="usd_signal_filter"
+        )
 
-        df_prospects_usd = df_live_prospects[df_live_prospects['Devise'] == 'USD']
-        if "Pré G %" in df_prospects_usd.columns:
-            df_prospects_usd = df_prospects_usd[(df_prospects_usd["Pré G %"].notna()) & (df_prospects_usd["Pré G %"] >= min_us) & (df_prospects_usd["Pré G %"] <= max_us)].sort_values(by=["Priorité Score", "Pré G %"], ascending=[False, False])
+        df_prospects_usd = df_live_prospects[df_live_prospects['Devise'] == 'USD'].copy()
+        if "Score" in df_prospects_usd.columns:
+            df_prospects_usd = df_prospects_usd[
+                df_prospects_usd["Score"].fillna(0).ge(min_score_us)
+                & df_prospects_usd["Risque"].fillna(100).le(max_risque_us)
+                & df_prospects_usd["Signal"].isin(filtre_signal_us)
+            ].sort_values(by=["Score", "Confiance"], ascending=[False, False], na_position="last")
 
         colonnes_a_afficher_pros_us = [c for c in colonnes_base_pros if c in df_prospects_usd.columns]
         config_description = config_largeur_description(df_prospects_usd, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
 
+        styled_usd = df_prospects_usd.style.apply(surligner_prospects, axis=1)
+        if afficher_var and 'Var %' in df_prospects_usd.columns:
+            styled_usd = styled_usd.map(couleur_var, subset=['Var %'])
+        if 'Signal' in df_prospects_usd.columns:
+            styled_usd = styled_usd.map(couleur_signal, subset=['Signal'])
+
         st.dataframe(
-            df_prospects_usd.style.apply(surligner_prospects, axis=1).map(couleur_var, subset=['Var %'] if afficher_var else []),
+            styled_usd,
             use_container_width=False, hide_index=True, height=(len(df_prospects_usd) * 35) + 43,
             column_order=colonnes_a_afficher_pros_us,
-            column_config={
-                **config_description,   # === largeur Description ===
-                "Priorité": st.column_config.TextColumn("Priorité", width=110),
-                "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
-                "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
-                "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
-                "Var %": st.column_config.NumberColumn(format="%.1f %%"), "Tendance": st.column_config.LineChartColumn("Tendance (5j)"),
-                "Chaleur 52s": st.column_config.ProgressColumn("♨️ 52 sem.", format="%.0f %%", min_value=0, max_value=100),
-                "Div %": st.column_config.NumberColumn("Div %", format="%.2f %%"),
-                **config_nb_analystes,  # === V4 ===
-                "Pré YF Display": st.column_config.NumberColumn("Pré YF", format="$ %.2f"),
-                "Pré Aff Display": st.column_config.NumberColumn("Pré Aff", format="$ %.2f")
-            }
+            column_config={**config_description, **config_colonnes_communes()}
         )
 
         if st.button("💾 Sauvegarder les données Prospects US (Sheets)"):
             with st.spinner("Écriture..."):
                 if sauvegarder_donnees_dans_sheets(df_prospects_usd, 'Prospects'): st.success("Sheets mis à jour !")
+
+    # --- ONGLET 4 : MÉTHODE ---
+    with tab4:
+        st.markdown(
+            """
+            ### 🎯 Score (0–100)
+            Le **Score** combine plusieurs facteurs, le **potentiel de gain restant le principal** :
+
+            | Facteur | Échelle | Poids |
+            |---|---|---|
+            | Potentiel de gain (Pré G %) | 0 % → 80 % | 50 % |
+            | Proximité du creux 52 sem. | sommet → creux | 18 % |
+            | Dividende (Div %) | 0 % → 6 % | 12 % |
+            | Momentum (Var % du jour) | −5 % → +5 % | 8 % |
+            | Faible volatilité | 15 % → 80 % (inversé) | 12 % |
+
+            👉 Point clé : le score est **normalisé par les poids des données disponibles**.
+            Une donnée manquante (ex. pas de dividende) n'est pas comptée comme zéro — elle est
+            simplement ignorée, donc elle ne pénalise pas injustement le titre.
+
+            ### 🛡️ Confiance (0–100)
+            Monte quand les données sont complètes (prix, cible Yahoo, cible Affaires, chaleur,
+            volatilité, dividende). **Baisse fortement quand les cibles Yahoo et Affaires se
+            contredisent** : si les deux analyses ne sont pas d'accord, on a moins confiance.
+
+            ### ⚠️ Risque (0–100)
+            Monte avec la **volatilité**, la **proximité du sommet 52 sem.**, un **objectif déjà
+            atteint** (potentiel négatif) et une **faible confiance**.
+
+            ### 🏷️ Signal
+            Étiquette lisible déduite des trois indices :
+            - **Priorité** : Score ≥ 75 et Confiance ≥ 60
+            - **À surveiller** : Score ≥ 60
+            - **À valider** : confiance trop faible (< 45)
+            - **Risque élevé** : Risque ≥ 75 sans score exceptionnel
+            - **Objectif atteint** : potentiel ≤ 0
+            - **Secondaire** : le reste
+
+            ---
+            *Cet outil sert à **prioriser une liste de surveillance**. Il n'est ni un conseil
+            financier ni un substitut à ton jugement.*
+            """
+        )
 
 except Exception as e:
     st.error(f"Erreur interceptée : {type(e).__name__} - {e}")
