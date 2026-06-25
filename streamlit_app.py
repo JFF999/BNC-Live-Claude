@@ -488,6 +488,7 @@ def calculer_priorite(df):
     df = df.copy()
     if 'Pré G %' not in df.columns:
         df['Priorité'] = ""
+        df['Priorité Score'] = 0.0
         return df
 
     preg = pd.to_numeric(df.get('Pré G %'), errors='coerce')
@@ -499,6 +500,7 @@ def calculer_priorite(df):
     score_fiab = (nb / 20.0).clip(0, 1).fillna(0)               # 0 ou manquant -> 0
 
     score = 0.5 * score_gain + 0.3 * score_creux + 0.2 * score_fiab
+    df['Priorité Score'] = score   # score continu (caché) pour le tri
 
     # Score 0..1 -> 1 à 5 étoiles
     etoiles = (score * 4 + 1).round().clip(1, 5)
@@ -740,7 +742,7 @@ try:
 
         df_prospects_cad = df_live_prospects[df_live_prospects['Devise'] == 'CAD']
         if "Pré G %" in df_prospects_cad.columns:
-            df_prospects_cad = df_prospects_cad[(df_prospects_cad["Pré G %"].notna()) & (df_prospects_cad["Pré G %"] >= min_cad) & (df_prospects_cad["Pré G %"] <= max_cad)].sort_values(by="Pré G %", ascending=False)
+            df_prospects_cad = df_prospects_cad[(df_prospects_cad["Pré G %"].notna()) & (df_prospects_cad["Pré G %"] >= min_cad) & (df_prospects_cad["Pré G %"] <= max_cad)].sort_values(by=["Priorité Score", "Pré G %"], ascending=[False, False])
 
         colonnes_a_afficher_pros = [c for c in colonnes_base_pros if c in df_prospects_cad.columns]
         config_description = config_largeur_description(df_prospects_cad, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
@@ -776,7 +778,7 @@ try:
 
         df_prospects_usd = df_live_prospects[df_live_prospects['Devise'] == 'USD']
         if "Pré G %" in df_prospects_usd.columns:
-            df_prospects_usd = df_prospects_usd[(df_prospects_usd["Pré G %"].notna()) & (df_prospects_usd["Pré G %"] >= min_us) & (df_prospects_usd["Pré G %"] <= max_us)].sort_values(by="Pré G %", ascending=False)
+            df_prospects_usd = df_prospects_usd[(df_prospects_usd["Pré G %"].notna()) & (df_prospects_usd["Pré G %"] >= min_us) & (df_prospects_usd["Pré G %"] <= max_us)].sort_values(by=["Priorité Score", "Pré G %"], ascending=[False, False])
 
         colonnes_a_afficher_pros_us = [c for c in colonnes_base_pros if c in df_prospects_usd.columns]
         config_description = config_largeur_description(df_prospects_usd, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
