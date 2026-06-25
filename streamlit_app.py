@@ -479,17 +479,17 @@ def surligner_prospects(row):
     if row.get('Possede') == True: return ['background-color: rgba(255, 215, 0, 0.4)'] * len(row)
     return [''] * len(row)
 
-def config_largeur_description(df, afficher):
+def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, largeur_max=600):
     # Largeur MINIMALE de la colonne Description, calée sur la plus longue description
     # RÉELLEMENT affichée dans CET onglet (optimise l'espace onglet par onglet).
+    # px_par_char / largeur_min / largeur_max permettent d'être plus ou moins agressif.
     if not afficher or 'Description' not in df.columns:
         return {}
     longueurs = df['Description'].dropna().astype(str).map(len)
     max_len = int(longueurs.max()) if len(longueurs) > 0 else 0
     if max_len <= 0:
         return {}
-    # ~8 px par caractère + marge, borné entre 120 et 600 px
-    largeur = int(min(max(max_len * 8 + 24, 120), 600))
+    largeur = int(min(max(max_len * px_par_char + 16, largeur_min), largeur_max))
     try:
         return {"Description": st.column_config.TextColumn("Description", width=largeur)}
     except Exception:
@@ -713,7 +713,7 @@ try:
             df_prospects_cad = df_prospects_cad[(df_prospects_cad["Pré G %"].notna()) & (df_prospects_cad["Pré G %"] >= min_cad) & (df_prospects_cad["Pré G %"] <= max_cad)].sort_values(by="Pré G %", ascending=False)
 
         colonnes_a_afficher_pros = [c for c in colonnes_base_pros if c in df_prospects_cad.columns]
-        config_description = config_largeur_description(df_prospects_cad, afficher_desc)
+        config_description = config_largeur_description(df_prospects_cad, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
 
         st.dataframe(
             df_prospects_cad.style.apply(surligner_prospects, axis=1).map(couleur_var, subset=['Var %'] if afficher_var else []),
@@ -748,7 +748,7 @@ try:
             df_prospects_usd = df_prospects_usd[(df_prospects_usd["Pré G %"].notna()) & (df_prospects_usd["Pré G %"] >= min_us) & (df_prospects_usd["Pré G %"] <= max_us)].sort_values(by="Pré G %", ascending=False)
 
         colonnes_a_afficher_pros_us = [c for c in colonnes_base_pros if c in df_prospects_usd.columns]
-        config_description = config_largeur_description(df_prospects_usd, afficher_desc)
+        config_description = config_largeur_description(df_prospects_usd, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
 
         st.dataframe(
             df_prospects_usd.style.apply(surligner_prospects, axis=1).map(couleur_var, subset=['Var %'] if afficher_var else []),
