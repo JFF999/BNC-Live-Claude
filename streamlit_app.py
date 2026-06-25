@@ -753,7 +753,7 @@ try:
             column_order=colonnes_a_afficher_pros,
             column_config={
                 **config_description,   # === largeur Description ===
-                "Priorité": st.column_config.TextColumn("⭐ Prio", width="small"),
+                "Priorité": st.column_config.TextColumn("Priorité", width=110),
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
                 "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
@@ -789,7 +789,7 @@ try:
             column_order=colonnes_a_afficher_pros_us,
             column_config={
                 **config_description,   # === largeur Description ===
-                "Priorité": st.column_config.TextColumn("⭐ Prio", width="small"),
+                "Priorité": st.column_config.TextColumn("Priorité", width=110),
                 "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
                 "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
                 "Pré G %": st.column_config.NumberColumn(format="%.1f %%"), "Prix $": st.column_config.NumberColumn(format="$ %.2f"),
