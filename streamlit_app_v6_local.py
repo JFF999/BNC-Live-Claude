@@ -739,6 +739,19 @@ try:
             tous_les_symboles.update([str(s).strip() for s in df_temp['Symbole'].dropna() if str(s).strip() not in ("", "0")])
     tous_les_symboles.update(["^GSPC", "^IXIC", "^GSPTSE"])
 
+    # === Équivalents US des actions CAD (pour la règle de trois sur Pré YF) ===
+    # On ajoute le ticker US déduit (sans suffixe) au téléchargement, pour que son objectif
+    # soit disponible même s'il n'est pas lui-même dans le Portefeuille / les Prospects.
+    candidats_us = set()
+    for s in list(tous_les_symboles):
+        for suff in ('.TO', '.V', '.NE', '.CN'):
+            if s.endswith(suff):
+                base = s[:-len(suff)]
+                if base:
+                    candidats_us.add(base)
+                break
+    tous_les_symboles.update(candidats_us)
+
     symboles_liste_stricte = tuple(sorted(list(tous_les_symboles)))
 
     with st.spinner("Mode Turbo : Chargement des marchés mondiaux..."):
