@@ -2,16 +2,16 @@
  * Synchronisation Excel (Drive) -> Google Sheet, DANS Google (Apps Script).
  *
  * Copie depuis Action_2026-c_New.xlsx (sur ton Drive) :
- *   - onglet "Portefeuille BNC" : colonnes A–H
- *   - onglet "Prospects"        : colonnes A–C
- * vers les onglets de MÊME nom dans ce Google Sheet. Les autres colonnes
- * (I–P, etc.) ne sont JAMAIS touchées.
+ *   - onglet "Portefeuille BNC" : colonnes A–J (source BNC + Pré Aff + MAJ Aff)
+ *   - onglet "Prospects"        : colonnes A–E (source + Pré Aff + MAJ Aff)
+ * vers les onglets de MÊME nom dans ce Google Sheet. Les colonnes calculées
+ * par l'app (Prix $, Pré G %, Pré YF, MAJ YF, …) ne sont JAMAIS touchées.
  *
  * INSTALLATION (une seule fois) :
  *   1. Ouvre le Google Sheet -> menu Extensions -> Apps Script.
  *   2. Colle TOUT ce fichier dans l'éditeur (remplace le contenu par défaut).
- *   3. Active le service avancé Drive : dans l'éditeur, panneau de gauche
- *      « Services » -> + -> « Drive API » -> Ajouter  (identifiant : Drive).
+ *   3. Active le service avancé Drive : panneau de gauche « Services » -> +
+ *      -> « Drive API » -> Ajouter. (v2 ou v3 : le script gère les deux.)
  *   4. Enregistre (icône disquette).
  *   5. Lance une fois la fonction « syncDepuisXlsx » (bouton Exécuter) et
  *      autorise l'accès quand Google le demande.
@@ -22,8 +22,8 @@
 var NOM_XLSX = 'Action_2026-c_New.xlsx';
 // Onglet -> nombre de colonnes à synchroniser (depuis A).
 var SYNC = {
-  'Portefeuille BNC': 8,  // A–H
-  'Prospects': 3          // A–C
+  'Portefeuille BNC': 10,  // A–J
+  'Prospects': 5           // A–E
 };
 // ===============================================================
 
@@ -34,6 +34,18 @@ function onOpen() {
     .createMenu('🔄 Sync')
     .addItem('Importer depuis Excel', 'syncDepuisXlsx')
     .addToUi();
+}
+
+
+/** Convertit un .xlsx (Blob) en Google Sheet temporaire et renvoie son id.
+ *  Compatible service avancé Drive v3 (Files.create) ET v2 (Files.insert). */
+function xlsxVersSheetTemporaire(blob) {
+  var ressource = { name: '__temp_import_bnc', mimeType: MimeType.GOOGLE_SHEETS };
+  if (Drive.Files.create) {            // Drive API v3 (par défaut aujourd'hui)
+    return Drive.Files.create(ressource, blob).id;
+  }
+  // Drive API v2 (ancien) : le champ s'appelle "title"
+  return Drive.Files.insert({ title: ressource.name, mimeType: ressource.mimeType }, blob).id;
 }
 
 
@@ -49,12 +61,9 @@ function syncDepuisXlsx() {
   }
   var xlsxFile = it.next();
 
-  // 2) Convertir le .xlsx en Google Sheet TEMPORAIRE (service avancé Drive, v2)
-  var temp = Drive.Files.insert(
-    { title: '__temp_import_bnc', mimeType: MimeType.GOOGLE_SHEETS },
-    xlsxFile.getBlob()
-  );
-  var tempSs = SpreadsheetApp.openById(temp.id);
+  // 2) Convertir le .xlsx en Google Sheet TEMPORAIRE
+  var tempId = xlsxVersSheetTemporaire(xlsxFile.getBlob());
+  var tempSs = SpreadsheetApp.openById(tempId);
 
   var resume = [];
   try {
@@ -75,7 +84,7 @@ function syncDepuisXlsx() {
     });
   } finally {
     // 4) Toujours supprimer le fichier temporaire
-    DriveApp.getFileById(temp.id).setTrashed(true);
+    DriveApp.getFileById(tempId).setTrashed(true);
   }
 
   ss.toast(resume.join('\n'), 'Synchronisation', 8);
