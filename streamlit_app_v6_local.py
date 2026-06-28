@@ -1,24 +1,24 @@
 import math
-import os
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import openpyxl
+import gspread
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-st.set_page_config(page_title="Portefeuille BNC (local)", layout="wide")
+st.set_page_config(page_title="Portefeuille BNC", layout="wide")
 
-# === v6 LOCALE : source de données = fichier Excel local (au lieu de Google Sheets) ===
-# IMPORTANT : à lancer en local (`streamlit run streamlit_app_v6_local.py`).
-# Le chemin ci-dessous n'existe que sur ta machine : cette version NE fonctionne PAS
-# sur Streamlit Cloud (le serveur distant n'a pas accès à ton Google Drive local).
-CHEMIN_EXCEL = r"G:\My Drive\Actions\Action_2026-c.xlsx"
+# === v6 : source de données = Google Sheet « Action_2026-c_New » ===
+# Ce Sheet est alimenté côté source par l'Apps Script (Excel -> Sheet : Portefeuille
+# A–H, Prospects A–C). L'app lit le Sheet, calcule les données Yahoo / scores, puis
+# réécrit UNIQUEMENT dans la zone autorisée. Fonctionne en local ET sur Streamlit
+# Cloud (identifiants via st.secrets["gcp_service_account"]).
+NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 # Indice (0-based) de la PREMIÈRE colonne en lecture/écriture, par feuille.
-# Tout ce qui est AVANT reste en LECTURE SEULE (formules/source BNC préservées).
+# Tout ce qui est AVANT reste en LECTURE SEULE (données source synchronisées).
 #   Portefeuille BNC : A–H lecture (0–7), I–P écriture (>= 8)
 #   Prospects        : A–C lecture (0–2), D–I écriture (>= 3)
 SEUIL_ECRITURE = {
@@ -79,21 +79,36 @@ def obtenir_taux_change():
     except Exception:
         return 1.35
 
-# --- LECTURE DU FICHIER EXCEL LOCAL ---
+# --- CONNEXION GOOGLE SHEETS ---
+def connecter_google_sheets():
+    info_cles = dict(st.secrets["gcp_service_account"])
+    gc = gspread.service_account_from_dict(info_cles)
+    return gc.open(NOM_GOOGLE_SHEET)
+
+def _nettoyer_entetes(entetes):
+    # Nettoie + déduplique les en-têtes (le Sheet peut avoir des libellés en double,
+    # ex. deux « Date MAJ »). Les doublons reçoivent un suffixe .1, .2 …
+    propres, vus = [], {}
+    for h in entetes:
+        h = ' '.join(str(h).replace('\n', ' ').replace('\r', '').split())
+        if h in vus:
+            vus[h] += 1
+            propres.append(f"{h}.{vus[h]}")
+        else:
+            vus[h] = 0
+            propres.append(h)
+    return propres
+
+# --- LECTURE DU GOOGLE SHEET ---
 @st.cache_data(ttl=300)
 def charger_donnees_base(nom_feuille):
-    if not os.path.exists(CHEMIN_EXCEL):
-        raise FileNotFoundError(f"Fichier introuvable : {CHEMIN_EXCEL}")
-    # pandas lit les VALEURS calculées des formules (pas les formules elles-mêmes)
-    df = pd.read_excel(CHEMIN_EXCEL, sheet_name=nom_feuille, engine="openpyxl")
-
-    # Numéro de ligne Excel (en-tête = ligne 1, données dès la ligne 2) capturé MAINTENANT,
-    # quand le cache des formules est valide. Sert à réécrire au bon endroit sans relire.
-    df['_excel_row'] = df.index + 2
-
-    # Nettoyage des noms de colonnes
-    df.columns = [str(c).replace('\n', ' ').replace('\r', '') for c in df.columns]
-    df.columns = [' '.join(c.split()) for c in df.columns]
+    sh = connecter_google_sheets()
+    feuille = sh.worksheet(nom_feuille)
+    valeurs = feuille.get_all_values()
+    if not valeurs:
+        return pd.DataFrame()
+    entetes = _nettoyer_entetes(valeurs[0])
+    df = pd.DataFrame(valeurs[1:], columns=entetes)
 
     # --- LE NETTOYEUR DE NOMBRES FLOTTANTS ---
     colonnes_flottantes = [
@@ -115,27 +130,34 @@ def charger_donnees_base(nom_feuille):
         df['Qtée'] = df['Qtée'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '', regex=False)
         df['Qtée'] = pd.to_numeric(df['Qtée'], errors='coerce').astype('Int64') # Int64 accepte les cases vides
 
+    # --- 'No.' en numérique (get_all_values renvoie du texte) ---
+    # Indispensable pour le filtre des lignes actives (No. != 0) du Portefeuille :
+    # les lignes vides/modèles (No. = "0" ou vide) deviennent 0 et seront écartées.
+    if 'No.' in df.columns:
+        df['No.'] = pd.to_numeric(
+            df['No.'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '', regex=False),
+            errors='coerce'
+        ).fillna(0).astype('Int64')
+
     return df
 
 def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
-    # Écrit les colonnes calculées dans le fichier Excel local, UNIQUEMENT dans la zone
-    # autorisée (>= SEUIL_ECRITURE). Les formules / liens source BNC restent intacts.
-    # Retourne (succès: bool, message: str).
-    if not os.path.exists(CHEMIN_EXCEL):
-        return False, f"Fichier introuvable : {CHEMIN_EXCEL}"
+    # Écrit les colonnes calculées dans le Google Sheet, UNIQUEMENT dans la zone
+    # autorisée (>= SEUIL_ECRITURE). Les colonnes source (A–H / A–C, synchronisées
+    # depuis l'Excel) restent intactes. Retourne (succès: bool, message: str).
     seuil = SEUIL_ECRITURE.get(nom_feuille, 9999)
-    if '_excel_row' not in df_live.columns:
-        return False, "Numéro de ligne Excel manquant (recharge la page)."
     try:
-        # 1) En-têtes (lecture légère)
-        wb_h = openpyxl.load_workbook(CHEMIN_EXCEL, read_only=True)
-        ws_h = wb_h[nom_feuille]
-        entetes = [c.value for c in next(ws_h.iter_rows(min_row=1, max_row=1))]
-        wb_h.close()
+        sh = connecter_google_sheets()
+        feuille = sh.worksheet(nom_feuille)
+        valeurs = feuille.get_all_values()
+        if not valeurs:
+            return False, "Feuille vide."
+        entetes = _nettoyer_entetes(valeurs[0])
         if 'Symbole' not in entetes:
             return False, "Colonne 'Symbole' introuvable."
+        col_symbole_idx = entetes.index('Symbole')
 
-        # 2) Colonnes calculées à écrire (nom feuille -> nom dans df), si en zone d'écriture
+        # Colonnes calculées (nom feuille -> nom dans df), seulement si en zone d'écriture
         colonnes_cibles = {
             'Prix $': 'Prix $',
             'Pré G %': 'Pré G %',
@@ -149,7 +171,7 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
             if sheet_col in entetes:
                 idx = entetes.index(sheet_col)
                 if idx >= seuil:   # zone d'écriture seulement (lecture seule sinon)
-                    colonnes_a_ecrire[idx] = df_col
+                    colonnes_a_ecrire[idx + 1] = df_col   # gspread : indices 1-based
 
         idx_date_maj = entetes.index('Date MAJ') if 'Date MAJ' in entetes else None
         if idx_date_maj is not None and idx_date_maj < seuil:
@@ -158,18 +180,27 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
         if not colonnes_a_ecrire and idx_date_maj is None:
             return False, "Aucune colonne en zone d'écriture pour cette feuille."
 
-        # 3) Ouvrir en écriture (formules préservées) et injecter via le N° de ligne Excel
-        horodatage = datetime.now(ZoneInfo("America/Toronto")).replace(tzinfo=None)
-        wb = openpyxl.load_workbook(CHEMIN_EXCEL)  # garde les formules
-        ws = wb[nom_feuille]
-        n = 0
-        for _, row_live in df_live.iterrows():
-            ligne = row_live.get('_excel_row')
-            if pd.isna(ligne):
+        # Index mémoire des données live par symbole
+        dict_live = {}
+        for _, r in df_live.iterrows():
+            sym = r.get('Symbole Brut')
+            if pd.notna(sym) and str(sym).strip() != "":
+                dict_live[str(sym).strip()] = r
+
+        horodatage = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d %H:%M")
+        mises_a_jour = []
+        for i, row_data in enumerate(valeurs):
+            if i == 0:
+                continue  # ligne d'en-tête
+            if len(row_data) <= col_symbole_idx:
                 continue
-            ligne = int(ligne)
+            sym = str(row_data[col_symbole_idx]).strip()
+            if not sym or sym not in dict_live:
+                continue
+            row_live = dict_live[sym]
+            ligne = i + 1   # gspread : ligne 1-based (en-tête = ligne 1)
             ecrit_ligne = False
-            for idx, df_col in colonnes_a_ecrire.items():
+            for col1, df_col in colonnes_a_ecrire.items():
                 valeur = row_live.get(df_col)
                 if pd.notna(valeur):
                     # Pourcentage -> stocké en décimal (0.XX), comme dans la feuille
@@ -177,27 +208,24 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
                         valeur_finale = round(float(valeur) / 100.0, 4)
                     else:
                         valeur_finale = round(float(valeur), 2)
-                    ws.cell(row=ligne, column=idx + 1, value=valeur_finale)
-                    n += 1
+                    mises_a_jour.append({
+                        'range': gspread.utils.rowcol_to_a1(ligne, col1),
+                        'values': [[valeur_finale]],
+                    })
                     ecrit_ligne = True
             if ecrit_ligne and idx_date_maj is not None:
-                cell = ws.cell(row=ligne, column=idx_date_maj + 1, value=horodatage)
-                cell.number_format = "yyyy-mm-dd hh:mm"
+                mises_a_jour.append({
+                    'range': gspread.utils.rowcol_to_a1(ligne, idx_date_maj + 1),
+                    'values': [[horodatage]],
+                })
 
-        # Demande à Excel de tout recalculer à la prochaine ouverture (les formules A–H
-        # ont perdu leur cache pendant l'écriture openpyxl ; Excel les recalcule à l'ouverture).
-        try:
-            wb.calculation.fullCalcOnLoad = True
-        except Exception:
-            pass
+        if not mises_a_jour:
+            return False, "Aucune donnée à écrire."
+        feuille.batch_update(mises_a_jour)
+        return True, f"{len(mises_a_jour)} cellules mises à jour dans « {nom_feuille} »."
 
-        wb.save(CHEMIN_EXCEL)
-        return True, f"{n} valeurs écrites dans « {nom_feuille} ». Ouvre le fichier dans Excel pour recalculer."
-
-    except PermissionError:
-        return False, "Le fichier est ouvert dans Excel. Ferme-le puis réessaie."
     except Exception as e:
-        return False, f"Erreur d'écriture Excel : {e}"
+        return False, f"Erreur Google Sheets : {e}"
 
 def preparer_export_csv(df):
     df_export = df.copy()
@@ -209,7 +237,7 @@ def preparer_export_csv(df):
     return df_export.to_csv(index=False, sep=';').encode('utf-8-sig')
 
 # --- TITRE PRINCIPAL ---
-st.title("📈 BNC LIVE v6 (Excel local)")
+st.title("📈 BNC LIVE v6 (Google Sheet)")
 
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
@@ -334,7 +362,7 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
 
     for index, row in df.iterrows():
         symbole = row.get('Symbole')
-        if pd.notna(symbole) and str(symbole).strip() != "":
+        if pd.notna(symbole) and str(symbole).strip() not in ("", "0"):
             symbole_clean = str(symbole).strip()
             df.at[index, 'Symbole Brut'] = symbole_clean
 
@@ -669,7 +697,7 @@ def config_colonnes_communes():
     }
 
 try:
-    with st.spinner("Lecture du fichier Excel local..."):
+    with st.spinner("Connexion à Google Sheets..."):
         df_base_portefeuille = charger_donnees_base('Portefeuille BNC')
         df_base_prospects = charger_donnees_base('Prospects')
 
@@ -681,7 +709,7 @@ try:
     tous_les_symboles = set()
     for df_temp in [df_portefeuille_actif, df_base_prospects]:
         if 'Symbole' in df_temp.columns:
-            tous_les_symboles.update([str(s).strip() for s in df_temp['Symbole'].dropna() if str(s).strip() != ""])
+            tous_les_symboles.update([str(s).strip() for s in df_temp['Symbole'].dropna() if str(s).strip() not in ("", "0")])
     tous_les_symboles.update(["^GSPC", "^IXIC", "^GSPTSE"])
 
     symboles_liste_stricte = tuple(sorted(list(tous_les_symboles)))
@@ -876,8 +904,8 @@ try:
 
         col_save, col_exp = st.columns(2)
         with col_save:
-            if st.button("💾 Sauvegarder vers Excel (Portefeuille)"):
-                with st.spinner("Écriture dans le fichier Excel..."):
+            if st.button("💾 Sauvegarder vers Google Sheet (Portefeuille)"):
+                with st.spinner("Écriture dans Google Sheets..."):
                     succes, message = sauvegarder_donnees_dans_sheets(df_live, 'Portefeuille BNC')
                     if succes: st.success(message)
                     else: st.error(message)
@@ -916,8 +944,8 @@ try:
             column_config={**config_description, **config_colonnes_communes()}
         )
 
-        if st.button("💾 Sauvegarder vers Excel (Prospects CAD)"):
-            with st.spinner("Écriture dans le fichier Excel..."):
+        if st.button("💾 Sauvegarder vers Google Sheet (Prospects CAD)"):
+            with st.spinner("Écriture dans Google Sheets..."):
                 succes, message = sauvegarder_donnees_dans_sheets(df_prospects_cad, 'Prospects')
                 if succes: st.success(message)
                 else: st.error(message)
@@ -956,8 +984,8 @@ try:
             column_config={**config_description, **config_colonnes_communes()}
         )
 
-        if st.button("💾 Sauvegarder vers Excel (Prospects US)"):
-            with st.spinner("Écriture dans le fichier Excel..."):
+        if st.button("💾 Sauvegarder vers Google Sheet (Prospects US)"):
+            with st.spinner("Écriture dans Google Sheets..."):
                 succes, message = sauvegarder_donnees_dans_sheets(df_prospects_usd, 'Prospects')
                 if succes: st.success(message)
                 else: st.error(message)
