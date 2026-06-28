@@ -32,10 +32,11 @@ CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"   # JSON du comp
 CHEMIN_LOG = r"G:\My Drive\Actions\bnc_sync_log.txt"             # journal des exécutions
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
-# Onglet -> nombre de colonnes (depuis A) à pousser depuis le xlsx.
+# Onglet -> config : nb de colonnes A.. à pousser, colonne Symbole, et plage des
+# colonnes CALCULÉES (écrites par l'app) à effacer si le symbole d'une ligne change.
 FEUILLES = {
-    "Portefeuille BNC": 10,  # A–J
-    "Prospects": 5,          # A–E
+    "Portefeuille BNC": {"nb_cols": 10, "col_symbole": "C", "calc": ("K", "Q")},  # A–J ; Sym=C ; calc K–Q
+    "Prospects":        {"nb_cols": 5,  "col_symbole": "A", "calc": ("F", "I")},  # A–E ; Sym=A ; calc F–I
 }
 # ===========================================================================
 
@@ -85,6 +86,20 @@ def lettre_colonne(n):
     return resultat
 
 
+def lettre_vers_index(lettre):
+    """A->0, B->1, ... C->2."""
+    idx = 0
+    for c in lettre:
+        idx = idx * 26 + (ord(c) - ord('A') + 1)
+    return idx - 1
+
+
+def norm_sym(valeur):
+    """Normalise un symbole pour comparaison ('', '0', 'nan' -> vide)."""
+    s = str(valeur).strip()
+    return "" if s in ("", "0", "nan", "None", "NaN") else s
+
+
 def main():
     if not os.path.exists(CHEMIN_XLSX):
         journal(f"ERREUR : fichier Excel introuvable : {CHEMIN_XLSX}")
@@ -97,7 +112,11 @@ def main():
     classeur = gc.open(NOM_GOOGLE_SHEET)
     journal(f"Google Sheet ouvert : {NOM_GOOGLE_SHEET}")
 
-    for nom_feuille, nb_cols in FEUILLES.items():
+    for nom_feuille, cfg in FEUILLES.items():
+        nb_cols = cfg["nb_cols"]
+        idx_sym = lettre_vers_index(cfg["col_symbole"])
+        debut_calc, fin_calc = cfg["calc"]
+
         # 1) Lire les nb_cols premières colonnes du xlsx (en-tête INCLUS = header=None).
         #    pandas lit les VALEURS en cache des formules (pas les formules).
         df = pd.read_excel(
@@ -106,17 +125,33 @@ def main():
         sous = df.iloc[:, :nb_cols]
         valeurs = [[serialiser(v) for v in ligne] for ligne in sous.itertuples(index=False)]
 
-        # 2) Écrire dans l'onglet correspondant du Google Sheet, à partir de A1
         try:
             ws = classeur.worksheet(nom_feuille)
         except gspread.exceptions.WorksheetNotFound:
             journal(f"  [ATTENTION] Onglet '{nom_feuille}' absent du Google Sheet - ignore.")
             continue
 
+        # 2) Lire les ANCIENS symboles du Sheet AVANT d'écraser A–J
+        actuel = ws.get_all_values()
+
+        # 3) Écrire A.. (source) à partir de A1
         derniere_lig = len(valeurs)
         plage = f"A1:{lettre_colonne(nb_cols)}{derniere_lig}"
         ws.update(range_name=plage, values=valeurs, value_input_option="USER_ENTERED")
-        journal(f"  [OK] {nom_feuille} : {derniere_lig} lignes x {nb_cols} colonnes ({plage}).")
+
+        # 4) Si le symbole d'une ligne a CHANGÉ, ses colonnes calculées (K–Q / F–I) sont
+        #    périmées (elles appartenaient à l'ancien symbole) -> on les efface.
+        a_effacer = []
+        for r in range(2, derniere_lig + 1):
+            nouv = norm_sym(df.iloc[r - 1, idx_sym]) if idx_sym < df.shape[1] else ""
+            anc = norm_sym(actuel[r - 1][idx_sym]) if (r - 1 < len(actuel) and idx_sym < len(actuel[r - 1])) else ""
+            if nouv != anc:
+                a_effacer.append(f"{debut_calc}{r}:{fin_calc}{r}")
+        if a_effacer:
+            ws.batch_clear(a_effacer)
+
+        journal(f"  [OK] {nom_feuille} : {derniere_lig} lignes x {nb_cols} col. ; "
+                f"{len(a_effacer)} ligne(s) calculee(s) effacee(s) (symbole change).")
 
     journal("Synchronisation terminee avec succes.")
 
