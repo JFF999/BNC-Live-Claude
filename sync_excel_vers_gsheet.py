@@ -1,34 +1,55 @@
 """
-Synchronise les colonnes A–H de Action_2026-c_New.xlsx vers le Google Sheet
-« Action_2026-c_New » (mêmes onglets, mêmes colonnes A–H).
+Synchronise les données SOURCE du fichier Excel vers le Google Sheet « Action_2026-c_New ».
+Lit les VALEURS en cache des formules (openpyxl/pandas) — donc PAS de #REF! (contrairement
+à une conversion Google du .xlsx).
 
-À LANCER EN LOCAL, avec le Python qui voit le lecteur G: (pythoncore) :
-    & "C:\\Users\\jfilt\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe" sync_excel_vers_gsheet.py
+  - onglet "Portefeuille BNC" : colonnes A–J  (source BNC + Pré Aff + MAJ Aff)
+  - onglet "Prospects"        : colonnes A–E  (source + Pré Aff + MAJ Aff)
+
+Les colonnes calculées par l'app (Prix $, Pré G %, Pré YF, MAJ YF, …) ne sont jamais touchées.
+
+À LANCER EN LOCAL, avec le Python qui voit le lecteur G: (pythoncore).
 
 Pré-requis (préparation unique) :
   1. Installer les libs :  python -m pip install gspread pandas openpyxl
-  2. Avoir le fichier JSON du compte de service Google (voir CHEMIN_CRED ci-dessous).
-  3. Partager le Google Sheet « Action_2026-c_New » avec l'e-mail du compte de
-     service (client_email du JSON), en droit **Éditeur**.
+  2. Placer le JSON du compte de service à l'emplacement CHEMIN_CRED ci-dessous.
+  3. Partager le Google Sheet « Action_2026-c_New » avec l'e-mail du compte de service
+     (champ client_email du JSON), en droit Éditeur.
 """
 
+import os
+import traceback
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import pandas as pd
 import gspread
 
 # ======================== CONFIGURATION (à adapter) ========================
 CHEMIN_XLSX = r"G:\My Drive\Actions\Action_2026-c_New.xlsx"
-CHEMIN_CRED = r"G:\My Drive\Actions\compte_service.json"   # <-- ton JSON de compte de service
+CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"   # JSON du compte de service (local, hors Drive)
+CHEMIN_LOG = r"G:\My Drive\Actions\bnc_sync_log.txt"             # journal des exécutions
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
-# Onglets à synchroniser et nombre de colonnes (A–H = 8) à pousser depuis le xlsx.
-# Adapte si un onglet a besoin d'un autre nombre de colonnes.
+# Onglet -> nombre de colonnes (depuis A) à pousser depuis le xlsx.
 FEUILLES = {
-    "Portefeuille BNC": 8,   # A–H
-    "Prospects": 8,          # A–H
+    "Portefeuille BNC": 10,  # A–J
+    "Prospects": 5,          # A–E
 }
 # ===========================================================================
+
+
+def journal(message):
+    """Affiche et enregistre une ligne horodatée dans le journal."""
+    horodatage = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d %H:%M:%S")
+    ligne = f"[{horodatage}] {message}"
+    print(ligne)
+    try:
+        with open(CHEMIN_LOG, "a", encoding="utf-8") as f:
+            f.write(ligne + "\n")
+    except Exception:
+        pass
 
 
 def serialiser(valeur):
@@ -45,7 +66,7 @@ def serialiser(valeur):
 
 
 def lettre_colonne(n):
-    """1 -> A, 2 -> B, ... 8 -> H."""
+    """1 -> A, 2 -> B, ... 10 -> J."""
     resultat = ""
     while n > 0:
         n, reste = divmod(n - 1, 26)
@@ -54,13 +75,20 @@ def lettre_colonne(n):
 
 
 def main():
-    print(f"Connexion au compte de service…")
+    if not os.path.exists(CHEMIN_XLSX):
+        journal(f"ERREUR : fichier Excel introuvable : {CHEMIN_XLSX}")
+        return
+    if not os.path.exists(CHEMIN_CRED):
+        journal(f"ERREUR : JSON du compte de service introuvable : {CHEMIN_CRED}")
+        return
+
     gc = gspread.service_account(filename=CHEMIN_CRED)
     classeur = gc.open(NOM_GOOGLE_SHEET)
-    print(f"Google Sheet ouvert : « {NOM_GOOGLE_SHEET} »")
+    journal(f"Google Sheet ouvert : « {NOM_GOOGLE_SHEET} »")
 
     for nom_feuille, nb_cols in FEUILLES.items():
-        # 1) Lire les nb_cols premières colonnes du xlsx (en-tête INCLUS = header=None)
+        # 1) Lire les nb_cols premières colonnes du xlsx (en-tête INCLUS = header=None).
+        #    pandas lit les VALEURS en cache des formules (pas les formules).
         df = pd.read_excel(
             CHEMIN_XLSX, sheet_name=nom_feuille, engine="openpyxl", header=None
         )
@@ -71,18 +99,20 @@ def main():
         try:
             ws = classeur.worksheet(nom_feuille)
         except gspread.exceptions.WorksheetNotFound:
-            print(f"  ⚠ Onglet « {nom_feuille} » absent du Google Sheet — ignoré.")
+            journal(f"  ⚠ Onglet « {nom_feuille} » absent du Google Sheet — ignoré.")
             continue
 
-        derniere_col = lettre_colonne(nb_cols)
         derniere_lig = len(valeurs)
-        plage = f"A1:{derniere_col}{derniere_lig}"
-
+        plage = f"A1:{lettre_colonne(nb_cols)}{derniere_lig}"
         ws.update(range_name=plage, values=valeurs, value_input_option="USER_ENTERED")
-        print(f"  ✓ {nom_feuille} : {derniere_lig} lignes × {nb_cols} colonnes ({plage}).")
+        journal(f"  ✓ {nom_feuille} : {derniere_lig} lignes × {nb_cols} colonnes ({plage}).")
 
-    print("Synchronisation terminée.")
+    journal("Synchronisation terminée avec succès.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        journal(f"ÉCHEC : {type(e).__name__} - {e}")
+        journal(traceback.format_exc())
