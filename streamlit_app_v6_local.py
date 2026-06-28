@@ -411,6 +411,24 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
             prevision_1an = infos_gen.get('targetMeanPrice')
             if prevision_1an is not None:
                 df.at[index, 'Pré 1an $ Yahoo'] = prevision_1an
+            elif symbole_clean.endswith(('.TO', '.V', '.NE', '.CN')) and prix_actuel is not None and prix_actuel > 0:
+                # === Action CAD sans objectif Yahoo : on emprunte celui du ticker US ===
+                # équivalent (souvent déjà dans les Prospects, donc déjà téléchargé), mis à
+                # l'échelle CAD par règle de trois sur les prix actuels :
+                #   Pré YF_CAD = Objectif_US × (Prix_CAD / Prix_US)
+                us_candidat = symbole_clean
+                for suff in ('.TO', '.V', '.NE', '.CN'):
+                    if us_candidat.endswith(suff):
+                        us_candidat = us_candidat[:-len(suff)]
+                        break
+                donnees_us = dict_yahoo.get(us_candidat, {})
+                cible_us = donnees_us.get('info', {}).get('targetMeanPrice')
+                hist_us = donnees_us.get('hist', pd.DataFrame())
+                if cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns:
+                    close_us = hist_us['Close'].dropna()
+                    if len(close_us) >= 1 and float(close_us.iloc[-1]) > 0:
+                        prix_us = float(close_us.iloc[-1])
+                        df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * (float(prix_actuel) / prix_us)
 
             # === V4 : nombre d'analystes derrière l'objectif (fiabilité du signal) ===
             nb_analystes = infos_gen.get('numberOfAnalystOpinions')
