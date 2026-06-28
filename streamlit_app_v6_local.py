@@ -73,6 +73,13 @@ def heure_mise_a_jour():
     return datetime.now(ZoneInfo("America/Toronto")).strftime("%H:%M")
 
 @st.cache_data(ttl=300, show_spinner=False)
+def signature_donnees(symboles):
+    # Empreinte d'un rafraîchissement RÉEL des données : capturée au moment du
+    # téléchargement (mise en cache 5 min, comme le fetch Yahoo). Sert à déclencher
+    # la sauvegarde auto UNE fois par rafraîchissement (et non à chaque rerun Streamlit).
+    return datetime.now(ZoneInfo("America/Toronto")).isoformat()
+
+@st.cache_data(ttl=300, show_spinner=False)
 def obtenir_taux_change():
     try:
         return yf.Ticker("USDCAD=X").history(period="1d")['Close'].iloc[-1]
@@ -751,6 +758,23 @@ try:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
     df_live_prospects = calculer_score_decision(df_live_prospects)  # === v5 ===
 
+    # === SAUVEGARDE AUTOMATIQUE : à chaque rafraîchissement réel des données ===
+    # On écrit le Portefeuille (complet) et TOUS les prospects (df_live_prospects entier,
+    # pas seulement les lignes filtrées des onglets). Déclenché une seule fois par
+    # rafraîchissement grâce à la signature (évite d'écrire à chaque rerun Streamlit).
+    sig = signature_donnees(symboles_liste_stricte)
+    if st.session_state.get('sig_sauvegarde') != sig:
+        ok_port, msg_port = sauvegarder_donnees_dans_sheets(df_live, 'Portefeuille BNC')
+        ok_pros, msg_pros = sauvegarder_donnees_dans_sheets(df_live_prospects, 'Prospects')
+        st.session_state['sig_sauvegarde'] = sig
+        if ok_port and ok_pros:
+            st.toast("💾 Google Sheet synchronisé.", icon="✅")
+        else:
+            if not ok_port:
+                st.warning(f"Sauvegarde Portefeuille : {msg_port}")
+            if not ok_pros:
+                st.warning(f"Sauvegarde Prospects : {msg_pros}")
+
     if afficher_bandeau:
         indices_marches = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "TSX": "^GSPTSE"}
         cols_m = st.columns(3)
@@ -922,14 +946,6 @@ try:
             column_config={**config_description, **config_colonnes_communes()}
         )
 
-        col_save, col_exp = st.columns(2)
-        with col_save:
-            if st.button("💾 Sauvegarder vers Google Sheet (Portefeuille)"):
-                with st.spinner("Écriture dans Google Sheets..."):
-                    succes, message = sauvegarder_donnees_dans_sheets(df_live, 'Portefeuille BNC')
-                    if succes: st.success(message)
-                    else: st.error(message)
-
     # --- ONGLET 2 : PROSPECTS CAD ---
     with tab2:
         col_min, col_max, col_sig = st.columns([1, 1, 2])
@@ -964,12 +980,6 @@ try:
             column_config={**config_description, **config_colonnes_communes()}
         )
 
-        if st.button("💾 Sauvegarder vers Google Sheet (Prospects CAD)"):
-            with st.spinner("Écriture dans Google Sheets..."):
-                succes, message = sauvegarder_donnees_dans_sheets(df_prospects_cad, 'Prospects')
-                if succes: st.success(message)
-                else: st.error(message)
-
     # --- ONGLET 3 : PROSPECTS US ---
     with tab3:
         col_min_us, col_max_us, col_sig_us = st.columns([1, 1, 2])
@@ -1003,12 +1013,6 @@ try:
             column_order=colonnes_a_afficher_pros_us,
             column_config={**config_description, **config_colonnes_communes()}
         )
-
-        if st.button("💾 Sauvegarder vers Google Sheet (Prospects US)"):
-            with st.spinner("Écriture dans Google Sheets..."):
-                succes, message = sauvegarder_donnees_dans_sheets(df_prospects_usd, 'Prospects')
-                if succes: st.success(message)
-                else: st.error(message)
 
     # --- ONGLET 4 : MÉTHODE ---
     with tab4:
