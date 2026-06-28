@@ -86,8 +86,8 @@ def connecter_google_sheets():
     return gc.open(NOM_GOOGLE_SHEET)
 
 def _nettoyer_entetes(entetes):
-    # Nettoie + déduplique les en-têtes (le Sheet peut avoir des libellés en double,
-    # ex. deux « Date MAJ »). Les doublons reçoivent un suffixe .1, .2 …
+    # Nettoie + déduplique les en-têtes par sécurité : si deux colonnes portent le même
+    # libellé, les doublons reçoivent un suffixe .1, .2 … (évite un plantage pandas).
     propres, vus = [], {}
     for h in entetes:
         h = ' '.join(str(h).replace('\n', ' ').replace('\r', '').split())
@@ -173,11 +173,13 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
                 if idx >= seuil:   # zone d'écriture seulement (lecture seule sinon)
                     colonnes_a_ecrire[idx + 1] = df_col   # gspread : indices 1-based
 
-        idx_date_maj = entetes.index('Date MAJ') if 'Date MAJ' in entetes else None
-        if idx_date_maj is not None and idx_date_maj < seuil:
-            idx_date_maj = None  # 'Date MAJ' hors zone d'écriture -> on n'y touche pas
+        # Horodatage Yahoo : on écrit UNIQUEMENT « MAJ YF » (côté Yahoo).
+        # « MAJ Aff » (côté Les Affaires) n'est jamais touchée par l'app.
+        idx_maj_yf = entetes.index('MAJ YF') if 'MAJ YF' in entetes else None
+        if idx_maj_yf is not None and idx_maj_yf < seuil:
+            idx_maj_yf = None  # hors zone d'écriture -> on n'y touche pas
 
-        if not colonnes_a_ecrire and idx_date_maj is None:
+        if not colonnes_a_ecrire and idx_maj_yf is None:
             return False, "Aucune colonne en zone d'écriture pour cette feuille."
 
         # Index mémoire des données live par symbole
@@ -213,9 +215,9 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
                         'values': [[valeur_finale]],
                     })
                     ecrit_ligne = True
-            if ecrit_ligne and idx_date_maj is not None:
+            if ecrit_ligne and idx_maj_yf is not None:
                 mises_a_jour.append({
-                    'range': gspread.utils.rowcol_to_a1(ligne, idx_date_maj + 1),
+                    'range': gspread.utils.rowcol_to_a1(ligne, idx_maj_yf + 1),
                     'values': [[horodatage]],
                 })
 
