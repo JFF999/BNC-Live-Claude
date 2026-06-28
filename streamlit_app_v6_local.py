@@ -125,17 +125,26 @@ def charger_donnees_base(nom_feuille):
 
     for col in colonnes_flottantes:
         if col in df.columns:
-            # Enleve $, %, et TOUTE espace (incl. insecables u00a0/u202f = separateur
-            # de milliers FR : "3 329,55 $" -> "3329.55"), puis virgule decimale -> point.
+            # Enleve symbole monetaire, pourcent et espaces (incl. insecables =
+            # separateur de milliers FR : "3 329,55" -> "3329"), puis virgule -> point.
+            # Remplacements LITTERAUX (regex=False) : pandas 3 / Arrow refuse les
+            # motifs regex avec echappements unicode.
             df[col] = (df[col].astype(str)
-                       .str.replace(r'[\s\u00a0\u202f$%]', '', regex=True)
+                       .str.replace('$', '', regex=False)
+                       .str.replace('%', '', regex=False)
+                       .str.replace(' ', '', regex=False)
+                       .str.replace(' ', '', regex=False)
+                       .str.replace(' ', '', regex=False)
                        .str.replace(',', '.', regex=False))
             df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
 
     # --- LE NETTOYEUR D'ENTIERS (Quantité) ---
     if 'Qtée' in df.columns:
         df['Qtée'] = (df['Qtée'].astype(str)
-                      .str.replace(r'[\s\u00a0\u202f,]', '', regex=True))
+                      .str.replace(' ', '', regex=False)
+                      .str.replace(' ', '', regex=False)
+                      .str.replace(' ', '', regex=False)
+                      .str.replace(',', '', regex=False))
         df['Qtée'] = pd.to_numeric(df['Qtée'], errors='coerce').astype('Int64') # Int64 accepte les cases vides
 
     # --- 'No.' en numérique (get_all_values renvoie du texte) ---
