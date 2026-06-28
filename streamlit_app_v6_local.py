@@ -353,6 +353,17 @@ def telecharger_tous_les_prix_yahoo(symboles):
 # Streamlit devait les HASHER à chaque appel (coûteux + cache-miss silencieux).
 # Comme telecharger_tous_les_prix_yahoo est déjà caché, on recalcule simplement.
 # ================================================================================
+def _meme_societe(nom_cad, nom_us):
+    # Garde-fou anti-collision pour la règle de trois : confirme que le ticker CAD et le
+    # ticker US déduit désignent la MÊME société (via le nom Yahoo). Pour les vraies
+    # interlistées/CDR, le longName est identique (« Alphabet Inc. »).
+    def norm(x):
+        return ' '.join(str(x or '').lower().replace('.', ' ').replace(',', ' ').split())
+    a, b = norm(nom_cad), norm(nom_us)
+    if len(a) < 3 or len(b) < 3:
+        return False
+    return a == b or a in b or b in a
+
 def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeuille=None):
     df = df.copy()
     if 'Description' not in df.columns:   # === Description : garantit que la colonne existe ===
@@ -429,9 +440,14 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                         us_candidat = us_candidat[:-len(suff)]
                         break
                 donnees_us = dict_yahoo.get(us_candidat, {})
-                cible_us = donnees_us.get('info', {}).get('targetMeanPrice')
+                info_us = donnees_us.get('info', {})
+                cible_us = info_us.get('targetMeanPrice')
                 hist_us = donnees_us.get('hist', pd.DataFrame())
-                if cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns:
+                # Garde-fou anti-collision : même société (nom Yahoo) côté CAD et US
+                nom_cad = infos_gen.get('longName') or infos_gen.get('shortName')
+                nom_us = info_us.get('longName') or info_us.get('shortName')
+                if (cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns
+                        and _meme_societe(nom_cad, nom_us)):
                     close_us = hist_us['Close'].dropna()
                     if len(close_us) >= 1 and float(close_us.iloc[-1]) > 0:
                         prix_us = float(close_us.iloc[-1])
