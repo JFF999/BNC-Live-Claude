@@ -34,9 +34,14 @@ NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 # Onglet -> config : nb de colonnes A.. à pousser, colonne Symbole, et plage des
 # colonnes CALCULÉES (écrites par l'app) à effacer si le symbole d'une ligne change.
+# Pré Aff / MAJ Aff ne sont PLUS poussés par la synchro aller (ils viennent de
+# Surperformance_LesAffaires via sync_affaires_vers_gsheet.py). On ne pousse donc que
+# A–H (Portefeuille) / A–C (Prospects). La zone "calc" effacée si le symbole change
+# couvre tout ce qui dépend du symbole au-delà de la source : I–Q / D–I (Pré Aff,
+# MAJ Aff + colonnes calculées par l'app).
 FEUILLES = {
-    "Portefeuille BNC": {"nb_cols": 10, "col_symbole": "C", "calc": ("K", "Q")},  # A–J ; Sym=C ; calc K–Q
-    "Prospects":        {"nb_cols": 5,  "col_symbole": "A", "calc": ("F", "I")},  # A–E ; Sym=A ; calc F–I
+    "Portefeuille BNC": {"nb_cols": 8, "col_symbole": "C", "calc": ("I", "Q")},  # A–H ; Sym=C ; clear I–Q
+    "Prospects":        {"nb_cols": 3, "col_symbole": "A", "calc": ("D", "I")},  # A–C ; Sym=A ; clear D–I
 }
 # ===========================================================================
 
