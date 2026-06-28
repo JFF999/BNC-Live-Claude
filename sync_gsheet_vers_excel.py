@@ -62,6 +62,16 @@ def lettre_vers_index(lettre):
     return idx - 1
 
 
+def index_vers_lettre(idx):
+    """0->A, 1->B, ..."""
+    idx += 1
+    s = ""
+    while idx > 0:
+        idx, r = divmod(idx - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
 def lettres_zone(debut, fin):
     return [chr(c) for c in range(ord(debut), ord(fin) + 1)]
 
@@ -117,13 +127,25 @@ def remplacer_cellule(bloc, ref, corps):
     return bloc[:m.start()] + cellule + bloc[m.end():]
 
 
-def modifier_xml_feuille(xml, colonnes, valeurs_par_ligne):
-    """colonnes: liste (lettre, est_date). valeurs_par_ligne: {row_num: {lettre: valeur}}."""
+def symbole_de_bloc(bloc, col_symbole, rownum):
+    """Extrait le symbole (valeur en cache) de la cellule col_symbole de la ligne."""
+    cm = re.search(r'<c r="' + col_symbole + rownum + r'"[^>]*?(?:/>|>.*?</c>)', bloc, re.S)
+    if not cm:
+        return ""
+    vm = re.search(r'<v>(.*?)</v>', cm.group(0), re.S)
+    return vm.group(1).strip() if vm else ""
+
+
+def modifier_xml_feuille(xml, colonnes, col_symbole, map_symbole):
+    """Pour chaque ligne, lit le SYMBOLE (cache de la cellule col_symbole) et écrit les
+    valeurs du Sheet correspondant à CE symbole (correspondance par symbole, pas position).
+    colonnes: liste (lettre, est_date). map_symbole: {symbole: {lettre: valeur}}."""
     def traiter_row(m):
-        rownum = int(m.group(1))
+        rownum = m.group(1)
         bloc = m.group(0)
-        vals = valeurs_par_ligne.get(rownum)
-        if vals is None:
+        symbole = symbole_de_bloc(bloc, col_symbole, rownum)
+        vals = map_symbole.get(symbole)
+        if not symbole or vals is None:
             return bloc
         for lettre, est_date in colonnes:
             bloc = remplacer_cellule(bloc, f"{lettre}{rownum}", contenu_cellule(vals.get(lettre), est_date))
@@ -168,6 +190,11 @@ def main():
             journal(f"  [ATTENTION] '{nom_feuille}' : Sheet vide - ignore.")
             continue
         entetes = donnees[0]
+        if "Symbole" not in entetes:
+            journal(f"  [ATTENTION] '{nom_feuille}' : colonne Symbole absente - ignore.")
+            continue
+        idx_sym = entetes.index("Symbole")
+        lettre_sym = index_vers_lettre(idx_sym)
 
         lettres = lettres_zone(debut, fin)
         colonnes = []
@@ -176,11 +203,14 @@ def main():
             est_date = (idx < len(entetes) and str(entetes[idx]).strip() == COL_DATE)
             colonnes.append((L, est_date))
 
-        # row Excel (>=2) -> {lettre: valeur Sheet}
-        valeurs_par_ligne = {}
+        # symbole -> {lettre: valeur Sheet}  (correspondance par SYMBOLE, pas par position)
+        map_symbole = {}
         for r in range(2, len(donnees) + 1):
             ligne = donnees[r - 1]
-            valeurs_par_ligne[r] = {
+            sym = str(ligne[idx_sym]).strip() if idx_sym < len(ligne) else ""
+            if not sym or sym == "0":
+                continue
+            map_symbole[sym] = {
                 L: (ligne[lettre_vers_index(L)] if lettre_vers_index(L) < len(ligne) else "")
                 for L in lettres
             }
@@ -189,8 +219,8 @@ def main():
         z = zipfile.ZipFile(CHEMIN_XLSX)
         xml = z.read(chemin_xml).decode("utf-8", "replace")
         z.close()
-        modifs[chemin_xml] = modifier_xml_feuille(xml, colonnes, valeurs_par_ligne)
-        journal(f"  [OK] {nom_feuille} : {len(valeurs_par_ligne)} lignes preparees ({debut}-{fin}).")
+        modifs[chemin_xml] = modifier_xml_feuille(xml, colonnes, lettre_sym, map_symbole)
+        journal(f"  [OK] {nom_feuille} : {len(map_symbole)} symboles correspondus ({debut}-{fin}).")
 
     if modifs:
         reecrire_xlsx(CHEMIN_XLSX, modifs)
