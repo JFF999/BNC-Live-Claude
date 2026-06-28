@@ -19,7 +19,7 @@ Pré-requis (préparation unique) :
 
 import os
 import traceback
-from datetime import datetime, date
+from datetime import datetime, date, time
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -44,7 +44,14 @@ def journal(message):
     """Affiche et enregistre une ligne horodatée dans le journal."""
     horodatage = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d %H:%M:%S")
     ligne = f"[{horodatage}] {message}"
-    print(ligne)
+    # La console Windows (cp1252) peut planter sur certains caractères : on protège l'affichage.
+    try:
+        print(ligne)
+    except Exception:
+        try:
+            print(ligne.encode("ascii", "replace").decode("ascii"))
+        except Exception:
+            pass
     try:
         with open(CHEMIN_LOG, "a", encoding="utf-8") as f:
             f.write(ligne + "\n")
@@ -56,13 +63,17 @@ def serialiser(valeur):
     """Convertit une cellule pandas en une valeur acceptée par l'API Google Sheets."""
     if pd.isna(valeur):
         return ""
+    if isinstance(valeur, time):                       # heure seule (ex. MAJ Aff)
+        return valeur.strftime("%H:%M:%S")
     if isinstance(valeur, (pd.Timestamp, datetime, date)):
         return valeur.strftime("%Y-%m-%d")
     if isinstance(valeur, np.integer):
         return int(valeur)
     if isinstance(valeur, np.floating):
         return float(valeur)
-    return valeur
+    if isinstance(valeur, (str, int, float, bool)):
+        return valeur
+    return str(valeur)                                  # repli sûr pour tout type inattendu
 
 
 def lettre_colonne(n):
@@ -84,7 +95,7 @@ def main():
 
     gc = gspread.service_account(filename=CHEMIN_CRED)
     classeur = gc.open(NOM_GOOGLE_SHEET)
-    journal(f"Google Sheet ouvert : « {NOM_GOOGLE_SHEET} »")
+    journal(f"Google Sheet ouvert : {NOM_GOOGLE_SHEET}")
 
     for nom_feuille, nb_cols in FEUILLES.items():
         # 1) Lire les nb_cols premières colonnes du xlsx (en-tête INCLUS = header=None).
@@ -99,15 +110,15 @@ def main():
         try:
             ws = classeur.worksheet(nom_feuille)
         except gspread.exceptions.WorksheetNotFound:
-            journal(f"  ⚠ Onglet « {nom_feuille} » absent du Google Sheet — ignoré.")
+            journal(f"  [ATTENTION] Onglet '{nom_feuille}' absent du Google Sheet - ignore.")
             continue
 
         derniere_lig = len(valeurs)
         plage = f"A1:{lettre_colonne(nb_cols)}{derniere_lig}"
         ws.update(range_name=plage, values=valeurs, value_input_option="USER_ENTERED")
-        journal(f"  ✓ {nom_feuille} : {derniere_lig} lignes × {nb_cols} colonnes ({plage}).")
+        journal(f"  [OK] {nom_feuille} : {derniere_lig} lignes x {nb_cols} colonnes ({plage}).")
 
-    journal("Synchronisation terminée avec succès.")
+    journal("Synchronisation terminee avec succes.")
 
 
 if __name__ == "__main__":
