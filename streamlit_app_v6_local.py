@@ -271,10 +271,10 @@ with col_param:
 
         st.markdown("---")
         st.markdown("**Affichage des Colonnes**")
-        afficher_no = st.checkbox("Afficher No.", value=False)
-        afficher_desc = st.checkbox("Afficher Description", value=False)
+        afficher_no = st.checkbox("Afficher No.", value=True)
+        afficher_desc = st.checkbox("Afficher Description", value=True)
         afficher_dev = st.checkbox("Afficher Devise (Dev.)", value=False)
-        afficher_compte = st.checkbox("Afficher Compte", value=False)
+        afficher_compte = st.checkbox("Afficher Compte", value=True)
 
         afficher_var = st.checkbox("Afficher Var %", value=True)
         afficher_tendance = st.checkbox("Afficher Tendance (1m)", value=False)
