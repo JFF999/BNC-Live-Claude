@@ -1,4 +1,5 @@
 import math
+import time
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -322,40 +323,78 @@ with col_btn:
 # L'interface de sortie reste identique : { sym: {'hist': df, 'info': dict} }
 # ================================================================================
 @st.cache_data(ttl=300, show_spinner=False)
-def telecharger_tous_les_prix_yahoo(symboles):
-    symboles = list(symboles)
-    resultats = {sym: {'hist': pd.DataFrame(), 'info': {}} for sym in symboles}
+def telecharger_tous_les_prix_yahoo(g1, g2, g3):
+    # === v6 : récupération PAR PRIORITÉ ===
+    # g1 = Portefeuille (+ indices), g2 = Prospects CAD, g3 = Prospects US
+    # (les équivalents US pour la règle de trois sont inclus dans chaque groupe).
+    # PRIX : un seul appel groupé pour TOUS (robuste, jamais bloqué).
+    # .info : récupéré priorité par priorité ; si Yahoo bloque (429 -> .info quasi vide),
+    # on s'ARRÊTE pour les priorités suivantes (reprises plus tard). Le Portefeuille (P1)
+    # est récupéré en premier et RÉ-ESSAYÉ après une pause s'il a des trous.
+    groupes = [tuple(g1), tuple(g2), tuple(g3)]
+    tous = list(dict.fromkeys(s for g in groupes for s in g))
+    resultats = {sym: {'hist': pd.DataFrame(), 'info': {}} for sym in tous}
 
     # --- 1) PRIX & HISTORIQUE : un seul appel groupé (rapide, robuste) ---
-    try:
-        data = yf.download(
-            symboles, period="1mo", interval="1d",  # === v5 : 5d -> 1mo (volatilité) ===
-            group_by="ticker", threads=True, progress=False, auto_adjust=True
-        )
-        for sym in symboles:
-            try:
-                hist = data if len(symboles) == 1 else data[sym]
-                hist = hist.dropna(how="all")
-                if not hist.empty:
-                    resultats[sym]['hist'] = hist
-            except Exception:
-                pass
-    except Exception:
-        pass
+    if tous:
+        try:
+            data = yf.download(
+                tous, period="1mo", interval="1d",
+                group_by="ticker", threads=True, progress=False, auto_adjust=True
+            )
+            for sym in tous:
+                try:
+                    hist = data if len(tous) == 1 else data[sym]
+                    hist = hist.dropna(how="all")
+                    if not hist.empty:
+                        resultats[sym]['hist'] = hist
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-    # --- 2) INFOS FONDAMENTALES : moins de threads pour éviter le rate-limit ---
+    # --- 2) INFOS (.info) PAR PRIORITÉ ---
     def fetch_info(sym):
         try:
-            return sym, yf.Ticker(sym).info
+            info = yf.Ticker(sym).info or {}
+            # un vrai .info a des dizaines de clés ; une réponse 429/échec en a très peu
+            return sym, info, (len(info) > 5)
         except Exception:
-            return sym, {}
+            return sym, {}, False
 
-    with ThreadPoolExecutor(max_workers=4) as executor:  # === V4 : 10 -> 4 ===
-        futures = [executor.submit(fetch_info, sym) for sym in symboles]
-        for future in as_completed(futures):
-            sym, info = future.result()
-            resultats[sym]['info'] = info
+    def recuperer(groupe):
+        echecs = 0
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for future in as_completed([executor.submit(fetch_info, s) for s in groupe]):
+                sym, info, ok = future.result()
+                if ok:
+                    resultats[sym]['info'] = info
+                else:
+                    echecs += 1
+        return echecs
 
+    niveaux_ok = []
+    bloque = False
+    for niveau, groupe in enumerate(groupes, 1):
+        if bloque:
+            break
+        if not groupe:
+            niveaux_ok.append(niveau)
+            continue
+        echecs = recuperer(list(groupe))
+        # P1 (Portefeuille) doit être complète : on retente les manquants après une pause.
+        if niveau == 1 and echecs > 0:
+            time.sleep(3)
+            manquants = [s for s in groupe if len(resultats[s]['info']) <= 5]
+            recuperer(manquants)
+            echecs = sum(1 for s in groupe if len(resultats[s]['info']) <= 5)
+        # Trop d'échecs sur ce groupe => Yahoo bloque -> on saute les priorités SUIVANTES.
+        if len(groupe) >= 5 and echecs > len(groupe) * 0.5:
+            bloque = True
+        else:
+            niveaux_ok.append(niveau)
+
+    resultats['__statut__'] = {'niveaux_ok': niveaux_ok, 'bloque': bloque}
     return resultats
 
 # === V4 : plus de @st.cache_data ici =============================================
@@ -759,29 +798,59 @@ try:
     else:
         df_portefeuille_actif = df_base_portefeuille.copy()
 
-    tous_les_symboles = set()
-    for df_temp in [df_portefeuille_actif, df_base_prospects]:
-        if 'Symbole' in df_temp.columns:
-            tous_les_symboles.update([str(s).strip() for s in df_temp['Symbole'].dropna() if str(s).strip() not in ("", "0")])
-    tous_les_symboles.update(["^GSPC", "^IXIC", "^GSPTSE"])
+    # === v6 : GROUPES DE PRIORITÉ pour la récupération Yahoo ===
+    #   P1 = Portefeuille (+ indices) ; P2 = Prospects CAD ; P3 = Prospects US.
+    # On ajoute pour chaque action CAD son équivalent US (règle de trois sur Pré YF).
+    SUFFIXES_CAD = ('.TO', '.V', '.NE', '.CN')
 
-    # === Équivalents US des actions CAD (pour la règle de trois sur Pré YF) ===
-    # On ajoute le ticker US déduit (sans suffixe) au téléchargement, pour que son objectif
-    # soit disponible même s'il n'est pas lui-même dans le Portefeuille / les Prospects.
-    candidats_us = set()
-    for s in list(tous_les_symboles):
-        for suff in ('.TO', '.V', '.NE', '.CN'):
+    def candidat_us(s):
+        for suff in SUFFIXES_CAD:
             if s.endswith(suff):
-                base = s[:-len(suff)]
-                if base:
-                    candidats_us.add(base)
-                break
-    tous_les_symboles.update(candidats_us)
+                return s[:-len(suff)]
+        return None
 
-    symboles_liste_stricte = tuple(sorted(list(tous_les_symboles)))
+    def symboles_de(df_):
+        if 'Symbole' not in df_.columns:
+            return []
+        return [str(s).strip() for s in df_['Symbole'].dropna() if str(s).strip() not in ("", "0")]
 
-    with st.spinner("Mode Turbo : Chargement des marchés mondiaux..."):
-        yahoo_data = telecharger_tous_les_prix_yahoo(symboles_liste_stricte)
+    def avec_us(liste):
+        out = list(liste)
+        for s in liste:
+            c = candidat_us(s)
+            if c:
+                out.append(c)
+        return out
+
+    syms_port = symboles_de(df_portefeuille_actif)
+    syms_pros = symboles_de(df_base_prospects)
+    grp1 = avec_us(syms_port) + ["^GSPC", "^IXIC", "^GSPTSE"]
+    grp2 = avec_us([s for s in syms_pros if s.endswith(SUFFIXES_CAD)])
+    grp3 = avec_us([s for s in syms_pros if not s.endswith(SUFFIXES_CAD)])
+
+    # Dédupliquer en RESPECTANT la priorité (un symbole déjà en P1 n'est pas refait en P2/P3)
+    vus = set()
+    def dedup(g):
+        r = []
+        for s in g:
+            if s and s not in vus:
+                vus.add(s)
+                r.append(s)
+        return tuple(r)
+    g1, g2, g3 = dedup(grp1), dedup(grp2), dedup(grp3)
+    symboles_liste_stricte = g1 + g2 + g3   # sert aussi à la signature de sauvegarde
+
+    with st.spinner("Mode Turbo : chargement par priorité (Portefeuille d'abord)..."):
+        yahoo_data = telecharger_tous_les_prix_yahoo(g1, g2, g3)
+
+    statut = yahoo_data.get('__statut__', {})
+    if statut.get('bloque'):
+        noms = {1: "Portefeuille", 2: "Prospects CAD", 3: "Prospects US"}
+        manquants = [noms[n] for n in (1, 2, 3) if n not in statut.get('niveaux_ok', [])]
+        if manquants:
+            st.info("⏳ Yahoo a limité les requêtes — non mis à jour ce coup-ci : "
+                    + ", ".join(manquants)
+                    + " (les valeurs précédentes sont conservées). Réessaie un peu plus tard pour compléter.")
 
     symboles_possedes = tuple(set(df_portefeuille_actif['Symbole'].dropna().astype(str).str.strip()))
 
