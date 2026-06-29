@@ -121,7 +121,8 @@ def main():
             continue
 
         updates = []
-        n = 0
+        n_maj = 0
+        n_vides = 0
         for r, row in enumerate(vals[1:], start=2):
             if len(row) <= i_sym:
                 continue
@@ -129,17 +130,30 @@ def main():
             if not sym or sym == '0':
                 continue
             entree = affaires.get(sym) or affaires.get(base_symbole(sym))
-            if not entree:
-                continue
-            date, cible = entree
-            updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [[cible]]})
-            if i_maj is not None and date:
-                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [[date]]})
-            n += 1
+            pa_actuel = str(row[i_pa]).strip() if len(row) > i_pa else ""
+            maj_actuel = str(row[i_maj]).strip() if (i_maj is not None and len(row) > i_maj) else ""
+            if entree:
+                date, cible = entree
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [[cible]]})
+                if i_maj is not None and date:
+                    updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [[date]]})
+                n_maj += 1
+            else:
+                # Hors Surperformance (source unique) : Pré Aff / MAJ Aff doivent être VIDES.
+                # On n'écrit que si la cellule n'est pas déjà vide (économie d'appels).
+                a_vide = False
+                if pa_actuel != "":
+                    updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [[""]]})
+                    a_vide = True
+                if i_maj is not None and maj_actuel != "":
+                    updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [[""]]})
+                    a_vide = True
+                if a_vide:
+                    n_vides += 1
 
         if updates:
             ws.batch_update(updates, value_input_option='USER_ENTERED')
-        journal(f"  [OK] {nom_feuille} : {n} symbole(s) Affaires mis a jour.")
+        journal(f"  [OK] {nom_feuille} : {n_maj} mis a jour, {n_vides} vide(s) (hors Surperformance).")
 
     journal("Mise a jour Les Affaires terminee avec succes.")
 
