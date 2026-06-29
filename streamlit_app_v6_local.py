@@ -785,6 +785,8 @@ def config_colonnes_communes():
         "Risque": st.column_config.ProgressColumn("Risque", format="%.0f", min_value=0, max_value=100),
         "Signal": st.column_config.TextColumn("Signal", width="small"),
         "Date Achat": st.column_config.DatetimeColumn("Date Achat", format="YYYY-MM-DD"),
+        "MAJ YF": st.column_config.TextColumn("Date YF", width="small"),
+        "MAJ Aff": st.column_config.TextColumn("Date Aff", width="small"),
     }
 
 try:
@@ -921,7 +923,7 @@ try:
     if afficher_div: colonnes_base_pros.append("Div %")
     if afficher_volatilite: colonnes_base_pros.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_pros.append("Nb Analystes")  # === V4 ===
-    colonnes_base_pros.extend(["Pré YF Display", "Pré Aff Display"])
+    colonnes_base_pros.extend(["Pré YF Display", "MAJ YF", "Pré Aff Display", "MAJ Aff"])
 
     tab1, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
 
