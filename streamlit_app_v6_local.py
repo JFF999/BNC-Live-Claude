@@ -323,15 +323,14 @@ with col_btn:
 # L'interface de sortie reste identique : { sym: {'hist': df, 'info': dict} }
 # ================================================================================
 @st.cache_data(ttl=300, show_spinner=False)
-def telecharger_tous_les_prix_yahoo(g1, g2, g3):
-    # === v6 : récupération PAR PRIORITÉ ===
-    # g1 = Portefeuille (+ indices), g2 = Prospects CAD, g3 = Prospects US
-    # (les équivalents US pour la règle de trois sont inclus dans chaque groupe).
+def telecharger_yahoo(groupes, retry_premier=False):
+    # === v6 : récupération PAR PRIORITÉ, appelable par phase ===
+    # groupes = liste ORDONNÉE de groupes de symboles (priorité décroissante).
     # PRIX : un seul appel groupé pour TOUS (robuste, jamais bloqué).
-    # .info : récupéré priorité par priorité ; si Yahoo bloque (429 -> .info quasi vide),
-    # on s'ARRÊTE pour les priorités suivantes (reprises plus tard). Le Portefeuille (P1)
-    # est récupéré en premier et RÉ-ESSAYÉ après une pause s'il a des trous.
-    groupes = [tuple(g1), tuple(g2), tuple(g3)]
+    # .info : récupéré groupe par groupe ; si Yahoo bloque (429 -> .info quasi vide),
+    # on s'ARRÊTE pour les groupes suivants (reprises plus tard).
+    # retry_premier : ré-essaie les manquants du 1er groupe après une pause (Portefeuille).
+    groupes = [tuple(g) for g in groupes]
     tous = list(dict.fromkeys(s for g in groupes for s in g))
     resultats = {sym: {'hist': pd.DataFrame(), 'info': {}} for sym in tous}
 
@@ -382,8 +381,8 @@ def telecharger_tous_les_prix_yahoo(g1, g2, g3):
             niveaux_ok.append(niveau)
             continue
         echecs = recuperer(list(groupe))
-        # P1 (Portefeuille) doit être complète : on retente les manquants après une pause.
-        if niveau == 1 and echecs > 0:
+        # 1er groupe (Portefeuille en phase 1) : on retente les manquants après une pause.
+        if niveau == 1 and retry_premier and echecs > 0:
             time.sleep(3)
             manquants = [s for s in groupe if len(resultats[s]['info']) <= 5]
             recuperer(manquants)
@@ -838,56 +837,31 @@ try:
                 r.append(s)
         return tuple(r)
     g1, g2, g3 = dedup(grp1), dedup(grp2), dedup(grp3)
-    symboles_liste_stricte = g1 + g2 + g3   # sert aussi à la signature de sauvegarde
-
-    with st.spinner("Mode Turbo : chargement par priorité (Portefeuille d'abord)..."):
-        yahoo_data = telecharger_tous_les_prix_yahoo(g1, g2, g3)
-
-    statut = yahoo_data.get('__statut__', {})
-    if statut.get('bloque'):
-        noms = {1: "Portefeuille", 2: "Prospects CAD", 3: "Prospects US"}
-        manquants = [noms[n] for n in (1, 2, 3) if n not in statut.get('niveaux_ok', [])]
-        if manquants:
-            st.info("⏳ Yahoo a limité les requêtes — non mis à jour ce coup-ci : "
-                    + ", ".join(manquants)
-                    + " (les valeurs précédentes sont conservées). Réessaie un peu plus tard pour compléter.")
-
     symboles_possedes = tuple(set(df_portefeuille_actif['Symbole'].dropna().astype(str).str.strip()))
 
-    df_live = construire_donnees(df_portefeuille_actif, yahoo_data, est_portefeuille=True)
-    df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes)  # === V4 ===
+    # === PHASE 1 : PORTEFEUILLE (priorité 1) — récupéré et AFFICHÉ en premier ===
+    with st.spinner("Chargement du Portefeuille..."):
+        yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True)
+
+    df_live = construire_donnees(df_portefeuille_actif, yahoo_p1, est_portefeuille=True)
+    df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes)
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
     df_live = calculer_score_decision(df_live, pour_portefeuille=True)  # === v5 : signal de vente ===
 
-    df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes)
-    df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes)  # === V4 ===
-    for col in ["Pré G %", "Var %"]:
-        if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
-    df_live_prospects = calculer_score_decision(df_live_prospects)  # === v5 ===
-
-    # === SAUVEGARDE AUTOMATIQUE : à chaque rafraîchissement réel des données ===
-    # On écrit le Portefeuille (complet) et TOUS les prospects (df_live_prospects entier,
-    # pas seulement les lignes filtrées des onglets). Déclenché une seule fois par
-    # rafraîchissement grâce à la signature (évite d'écrire à chaque rerun Streamlit).
-    sig = signature_donnees(symboles_liste_stricte)
-    if st.session_state.get('sig_sauvegarde') != sig:
-        ok_port, msg_port = sauvegarder_donnees_dans_sheets(df_live, 'Portefeuille BNC')
-        ok_pros, msg_pros = sauvegarder_donnees_dans_sheets(df_live_prospects, 'Prospects')
-        st.session_state['sig_sauvegarde'] = sig
-        if ok_port and ok_pros:
-            st.toast("💾 Google Sheet synchronisé.", icon="✅")
-        else:
-            if not ok_port:
-                st.warning(f"Sauvegarde Portefeuille : {msg_port}")
-            if not ok_pros:
-                st.warning(f"Sauvegarde Prospects : {msg_pros}")
+    # Sauvegarde auto du Portefeuille (une fois par rafraîchissement, via signature)
+    sig_port = signature_donnees(("PORT",) + g1)
+    if st.session_state.get('sig_save_port') != sig_port:
+        ok_p, msg_p = sauvegarder_donnees_dans_sheets(df_live, 'Portefeuille BNC')
+        st.session_state['sig_save_port'] = sig_port
+        if ok_p: st.toast("💾 Portefeuille synchronisé.", icon="✅")
+        else: st.warning(f"Sauvegarde Portefeuille : {msg_p}")
 
     if afficher_bandeau:
         indices_marches = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "TSX": "^GSPTSE"}
         cols_m = st.columns(3)
         for idx, (nom_m, sym_m) in enumerate(indices_marches.items()):
-            m_data = yahoo_data.get(sym_m, {}).get('hist', pd.DataFrame())
+            m_data = yahoo_p1.get(sym_m, {}).get('hist', pd.DataFrame())
             if not m_data.empty and len(m_data) >= 2:
                 m_actuel = m_data['Close'].iloc[-1]
                 m_veille = m_data['Close'].iloc[-2]
@@ -898,27 +872,9 @@ try:
                 cols_m[idx].markdown(f"<div class='market-block'>**{nom_m}** : Indisponible</div>", unsafe_allow_html=True)
         st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    if afficher_alertes:
-        alertes_generees = []
-        if not df_live.empty:
-            for _, row in df_live.iterrows():
-                sym = row.get('Symbole Brut', 'Action')
-                if pd.notna(row.get('Pré G %')) and row['Pré G %'] <= 0:
-                    alertes_generees.append(f"🎯 **{sym}** a atteint son objectif de prix !")
-                if pd.notna(row.get('Var %')):
-                    if row['Var %'] >= 5.0: alertes_generees.append(f"🚀 **{sym}** s'envole (+{row['Var %']:.1f}%)")
-                    elif row['Var %'] <= -5.0: alertes_generees.append(f"🔻 **{sym}** chute ({row['Var %']:.1f}%)")
-        if not df_live_prospects.empty:
-            for _, row in df_live_prospects.iterrows():
-                sym = row.get('Symbole Brut', 'Action')
-                if row.get('Signal') == "Priorité":
-                    alertes_generees.append(f"⭐ **{sym}** (Prospect) ressort en PRIORITÉ.")
-                if pd.notna(row.get('Chaleur 52s')) and row['Chaleur 52s'] <= 5.0:
-                    alertes_generees.append(f"🔥 **{sym}** (Prospect) est au plus bas sur 1 an !")
-        if alertes_generees:
-            html_alertes = "<div class='alert-box'><strong>🚨 Alertes Actives :</strong><br>"
-            for alerte in alertes_generees: html_alertes += f"<p class='alert-item'>{alerte}</p>"
-            st.markdown(html_alertes + "</div>", unsafe_allow_html=True)
+    # Emplacements réservés en HAUT (remplis quand les prospects sont chargés, phase 2)
+    ph_messages = st.empty()
+    ph_alertes = st.empty()
 
     # --- ARCHITECTURE DES COLONNES (Unifiée pour tous les onglets) ---
     colonnes_base_port = []
@@ -1053,6 +1009,59 @@ try:
             column_order=colonnes_a_afficher,
             column_config={**config_description, **config_colonnes_communes()}
         )
+
+    # === PHASE 2 : PROSPECTS (priorités 2 et 3) — chargés APRÈS l'affichage du Portefeuille ===
+    with st.spinner("Chargement des Prospects (CAD puis US)..."):
+        yahoo_p23 = telecharger_yahoo((g2, g3))
+    yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
+
+    df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes)
+    df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes)
+    for col in ["Pré G %", "Var %"]:
+        if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
+    df_live_prospects = calculer_score_decision(df_live_prospects)  # === v5 ===
+
+    # Sauvegarde auto des Prospects
+    sig_pros = signature_donnees(("PROS",) + g2 + g3)
+    if st.session_state.get('sig_save_pros') != sig_pros:
+        ok_r, msg_r = sauvegarder_donnees_dans_sheets(df_live_prospects, 'Prospects')
+        st.session_state['sig_save_pros'] = sig_pros
+        if ok_r: st.toast("💾 Prospects synchronisés.", icon="✅")
+        else: st.warning(f"Sauvegarde Prospects : {msg_r}")
+
+    # Message si Yahoo a bloqué une priorité prospects (1=CAD, 2=US)
+    statut = yahoo_p23.get('__statut__', {})
+    if statut.get('bloque'):
+        noms = {1: "Prospects CAD", 2: "Prospects US"}
+        manquants = [noms[n] for n in (1, 2) if n not in statut.get('niveaux_ok', [])]
+        if manquants:
+            ph_messages.info("⏳ Yahoo a limité les requêtes — non mis à jour ce coup-ci : "
+                             + ", ".join(manquants)
+                             + " (valeurs précédentes conservées). Réessaie un peu plus tard.")
+
+    # Alertes (Portefeuille + Prospects) -> emplacement réservé en haut
+    if afficher_alertes:
+        with ph_alertes.container():
+            alertes_generees = []
+            if not df_live.empty:
+                for _, row in df_live.iterrows():
+                    sym = row.get('Symbole Brut', 'Action')
+                    if pd.notna(row.get('Pré G %')) and row['Pré G %'] <= 0:
+                        alertes_generees.append(f"🎯 **{sym}** a atteint son objectif de prix !")
+                    if pd.notna(row.get('Var %')):
+                        if row['Var %'] >= 5.0: alertes_generees.append(f"🚀 **{sym}** s'envole (+{row['Var %']:.1f}%)")
+                        elif row['Var %'] <= -5.0: alertes_generees.append(f"🔻 **{sym}** chute ({row['Var %']:.1f}%)")
+            if not df_live_prospects.empty:
+                for _, row in df_live_prospects.iterrows():
+                    sym = row.get('Symbole Brut', 'Action')
+                    if row.get('Signal') == "Priorité":
+                        alertes_generees.append(f"⭐ **{sym}** (Prospect) ressort en PRIORITÉ.")
+                    if pd.notna(row.get('Chaleur 52s')) and row['Chaleur 52s'] <= 5.0:
+                        alertes_generees.append(f"🔥 **{sym}** (Prospect) est au plus bas sur 1 an !")
+            if alertes_generees:
+                html_alertes = "<div class='alert-box'><strong>🚨 Alertes Actives :</strong><br>"
+                for alerte in alertes_generees: html_alertes += f"<p class='alert-item'>{alerte}</p>"
+                st.markdown(html_alertes + "</div>", unsafe_allow_html=True)
 
     # --- ONGLET 2 : PROSPECTS CAD ---
     with tab2:
