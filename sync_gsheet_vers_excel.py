@@ -27,12 +27,15 @@ CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
 CHEMIN_LOG = r"G:\My Drive\Actions\bnc_sync_log.txt"
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
-# Feuille -> (première lettre, dernière lettre) de la zone calculée à recopier.
+# Feuille -> (première lettre, dernière lettre) de la zone à recopier vers l'Excel.
+# Inclut Pré Aff / MAJ Aff (donnees Les Affaires) ET les colonnes calculees par l'app.
 ZONES = {
-    "Portefeuille BNC": ("K", "Q"),
-    "Prospects": ("F", "I"),
+    "Portefeuille BNC": ("I", "Q"),   # I=Pré Aff, J=MAJ Aff, K..Q = calculees
+    "Prospects": ("D", "I"),          # D=Pré Aff, E=MAJ Aff, F..I = calculees
 }
-COL_DATE = "MAJ YF"   # en-tête de la colonne horodatage -> écrite comme date Excel (série)
+# En-tetes des colonnes DATE -> ecrites comme date Excel (serie). MAJ Aff arrive deja
+# en serie numerique (depuis le Sheet), MAJ YF en chaine -> les deux sont geres.
+COLS_DATE = {"MAJ YF", "MAJ Aff"}
 EPOCH_EXCEL = datetime(1899, 12, 30)
 # ===============================================================
 
@@ -96,8 +99,10 @@ def contenu_cellule(valeur, est_date):
     """Construit le corps <v>...</v> d'une cellule, ou None si vide."""
     if valeur is None or valeur == "":
         return None
-    if est_date:
-        s = str(valeur).strip()
+    # Colonne date fournie en CHAINE ("YYYY-MM-DD [HH:MM]") -> conversion en serie Excel.
+    # (Si la valeur est deja numerique, ex. MAJ Aff = serie, on tombe dans le bloc nombre.)
+    if est_date and isinstance(valeur, str):
+        s = valeur.strip()
         dt = None
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
             try:
@@ -200,7 +205,7 @@ def main():
         colonnes = []
         for L in lettres:
             idx = lettre_vers_index(L)
-            est_date = (idx < len(entetes) and str(entetes[idx]).strip() == COL_DATE)
+            est_date = (idx < len(entetes) and str(entetes[idx]).strip() in COLS_DATE)
             colonnes.append((L, est_date))
 
         # symbole -> {lettre: valeur Sheet}  (correspondance par SYMBOLE, pas par position)
