@@ -305,6 +305,13 @@ with col_param:
             min_value=0, max_value=50, value=0, step=1
         )
 
+        # Pré Aff périmée : ignorée dans le calcul du Pré G % si la prévision (MAJ Aff)
+        # date de plus de N mois. La valeur reste affichée mais grisée. 0 = jamais ignorée.
+        mois_max_aff = st.number_input(
+            "Ignorer Pré Aff si la prévision date de plus de (mois, 0 = jamais)",
+            min_value=0, max_value=60, value=6, step=1
+        )
+
 with col_btn:
     if st.button(f"🔄 Rafraîchir ({heure_actuelle})"):
         st.cache_data.clear()
@@ -541,7 +548,7 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
     df['Tendance'] = tendances
     return df
 
-def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0):  # === V4 : param min_analystes ===
+def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0, mois_max_aff=0):  # === V4 : min_analystes ; v6 : mois_max_aff ===
     df = df.copy()
     if 'Prix $' not in df.columns:
         return df
@@ -571,20 +578,29 @@ def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0):
     else:
         affaires = pd.Series(np.nan, index=df.index)
 
+    # === v6 : Pré Aff PÉRIMÉE — ignorée dans le calcul si MAJ Aff date de plus de N mois ===
+    perime = pd.Series(False, index=df.index)
+    if mois_max_aff and mois_max_aff > 0 and 'MAJ Aff' in df.columns:
+        dates_aff = pd.to_datetime(df['MAJ Aff'], errors='coerce')
+        seuil = pd.Timestamp.now() - pd.DateOffset(months=int(mois_max_aff))
+        perime = dates_aff.notna() & (dates_aff < seuil) & affaires.notna()
+    affaires_calc = affaires.where(~perime, np.nan)   # ignorée dans le calcul si périmée
+
     if source == "Yahoo":
-        cible = yahoo.fillna(affaires)
+        cible = yahoo.fillna(affaires_calc)
     elif source == "Affaires":
-        cible = affaires.fillna(yahoo)
+        cible = affaires_calc.fillna(yahoo)
     else:
-        temp = pd.DataFrame({'Y': yahoo, 'A': affaires})
+        temp = pd.DataFrame({'Y': yahoo, 'A': affaires_calc})
         cible = temp.mean(axis=1, skipna=True)
 
     mask = (prix > 0) & cible.notna()
     df.loc[mask, 'Pré G %'] = (cible[mask] - prix[mask]) / prix[mask]
 
-    # Enregistrement pour l'affichage
+    # Enregistrement pour l'affichage (valeur Pré Aff RÉELLE, grisée si périmée)
     df['Pré YF Display'] = yahoo
     df['Pré Aff Display'] = affaires
+    df['Pré Aff Périmé'] = perime
 
     return df
 
@@ -745,6 +761,13 @@ def surligner_prospects(row):
     if row.get('Possede') == True: return ['background-color: rgba(255, 215, 0, 0.4)'] * len(row)
     return [''] * len(row)
 
+def griser_pre_aff_perime(row):
+    # Grise la valeur Pré Aff affichée quand la prévision est périmée (non prise en compte).
+    styles = [''] * len(row)
+    if row.get('Pré Aff Périmé') and 'Pré Aff Display' in row.index:
+        styles[row.index.get_loc('Pré Aff Display')] = 'color: #9aa0a6; font-style: italic;'
+    return styles
+
 def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, largeur_max=600):
     # Largeur MINIMALE de la colonne Description, calée sur la plus longue description
     # RÉELLEMENT affichée dans CET onglet (optimise l'espace onglet par onglet).
@@ -846,7 +869,7 @@ try:
         yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True)
 
     df_live = construire_donnees(df_portefeuille_actif, yahoo_p1, est_portefeuille=True)
-    df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes)
+    df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes, mois_max_aff=mois_max_aff)
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
     df_live = calculer_score_decision(df_live, pour_portefeuille=True)  # === v5 : signal de vente ===
@@ -1004,6 +1027,8 @@ try:
             styled_port = styled_port.map(couleur_var, subset=['Var %'])
         if 'Signal' in df_live.columns:
             styled_port = styled_port.map(couleur_signal_portefeuille, subset=['Signal'])
+        if 'Pré Aff Périmé' in df_live.columns:
+            styled_port = styled_port.apply(griser_pre_aff_perime, axis=1)
 
         st.dataframe(
             styled_port,
@@ -1018,7 +1043,7 @@ try:
     yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
 
     df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes)
-    df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes)
+    df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes, mois_max_aff=mois_max_aff)
     for col in ["Pré G %", "Var %"]:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
     df_live_prospects = calculer_score_decision(df_live_prospects)  # === v5 ===
@@ -1091,6 +1116,8 @@ try:
             styled_cad = styled_cad.map(couleur_var, subset=['Var %'])
         if 'Signal' in df_prospects_cad.columns:
             styled_cad = styled_cad.map(couleur_signal, subset=['Signal'])
+        if 'Pré Aff Périmé' in df_prospects_cad.columns:
+            styled_cad = styled_cad.apply(griser_pre_aff_perime, axis=1)
 
         st.dataframe(
             styled_cad,
@@ -1125,6 +1152,8 @@ try:
             styled_usd = styled_usd.map(couleur_var, subset=['Var %'])
         if 'Signal' in df_prospects_usd.columns:
             styled_usd = styled_usd.map(couleur_signal, subset=['Signal'])
+        if 'Pré Aff Périmé' in df_prospects_usd.columns:
+            styled_usd = styled_usd.apply(griser_pre_aff_perime, axis=1)
 
         st.dataframe(
             styled_usd,
