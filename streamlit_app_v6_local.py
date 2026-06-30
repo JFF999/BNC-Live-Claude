@@ -902,7 +902,7 @@ try:
     if afficher_volatilite: colonnes_base_port.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_port.append("Nb Analystes")  # === V4 ===
 
-    colonnes_base_port.extend(["Pré YF Display", "Pré Aff Display", "Pré G %", "Achat $", "Qtée", "Date Achat"])
+    colonnes_base_port.extend(["Pré YF Display", "Pré Aff Display", "Pré G %", "Achat $", "Qtée", "Date Achat", "MAJ YF", "MAJ Aff"])
 
     # On utilise la même logique d'affichage de base pour les prospects
     colonnes_base_pros = []

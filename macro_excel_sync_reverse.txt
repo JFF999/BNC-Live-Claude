@@ -1,0 +1,42 @@
+' =====================================================================
+'  MACRO EXCEL : lancer la synchro inverse (Google Sheet -> Excel) a
+'  l'ouverture du classeur.
+'
+'  -> Lance bnc_sync_reverse.bat, qui execute sync_gsheet_vers_excel.py
+'     (met a jour Action_2026-c_New.xlsx depuis le Google Sheet).
+'
+'  IMPORTANT :
+'   - A placer dans le classeur que tu OUVRES (un .xlsm), PAS dans
+'     Action_2026-c_New.xlsx (la synchro ecrit dedans -> il doit etre FERME).
+'   - Active les macros a l'ouverture.
+'
+'  INSTALLATION :
+'   1. Ouvre ton classeur .xlsm -> Alt+F11 (editeur VBA).
+'   2. Dans l'arbre a gauche, double-clique sur "ThisWorkbook"
+'      (ou " Ce_classeur ").
+'   3. Colle le code ci-dessous.
+'   4. Enregistre en .xlsm (classeur prenant en charge les macros).
+' =====================================================================
+
+Private Sub Workbook_Open()
+    Dim bat As String
+    bat = "C:\Users\jfilt\OneDrive\Documents\JFF\Claude\BNC-Live-Claude\bnc_sync_reverse.bat"
+
+    Dim sh As Object
+    Set sh = CreateObject("WScript.Shell")
+
+    ' 0 = fenetre cachee ; True = ATTENDRE la fin de la synchro avant de continuer
+    ' (la synchro prend ~3 s ; les donnees sont donc a jour des l'ouverture).
+    sh.Run """" & bat & """", 0, True
+
+    ' --- Optionnel : rafraichir les liens externes pour afficher les nouvelles
+    ' --- valeurs (decommente si ton classeur est lie a Action_2026-c_New.xlsx).
+    ' On Error Resume Next
+    ' ThisWorkbook.UpdateLink Name:=ThisWorkbook.LinkSources(xlExcelLinks)
+    ' On Error GoTo 0
+End Sub
+
+
+' --- Variante NON bloquante (le fichier s'ouvre tout de suite, la synchro
+' --- tourne en arriere-plan ; remplace l'appel sh.Run ci-dessus par :)
+'     sh.Run """" & bat & """", 0, False
