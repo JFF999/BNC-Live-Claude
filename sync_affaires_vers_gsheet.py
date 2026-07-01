@@ -77,6 +77,17 @@ def trouver(entetes, nom):
     return None
 
 
+def date_key(s):
+    """Clé de tri d'une date (chaîne) : datetime, ou datetime.min si illisible."""
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    return datetime.min
+
+
 def main():
     if not os.path.exists(CHEMIN_CRED):
         journal(f"ERREUR : JSON compte de service introuvable : {CHEMIN_CRED}")
@@ -96,7 +107,11 @@ def main():
             continue
         cible = parse_nombre(row[SRC_COL_CIBLE])
         date = str(row[SRC_COL_DATE]).strip()
-        if cible is not None:
+        if cible is None:
+            continue
+        # Un meme symbole peut apparaitre plusieurs fois : on garde la PLUS RECENTE.
+        ancien = affaires.get(sym)
+        if ancien is None or date_key(date) >= date_key(ancien[0]):
             affaires[sym] = (date, cible)
     journal(f"{len(affaires)} objectifs lus depuis « {NOM_SOURCE} ».")
 
@@ -129,7 +144,11 @@ def main():
             sym = str(row[i_sym]).strip().upper()
             if not sym or sym == '0':
                 continue
-            entree = affaires.get(sym) or affaires.get(base_symbole(sym))
+            # Le symbole du Sheet (ex. MDA.TO) peut exister sous forme exacte ET base
+            # (ex. MDA) dans la source, avec des dates differentes -> on prend la PLUS RECENTE.
+            candidats = [affaires.get(sym), affaires.get(base_symbole(sym))]
+            candidats = [c for c in candidats if c]
+            entree = max(candidats, key=lambda c: date_key(c[0])) if candidats else None
             pa_actuel = str(row[i_pa]).strip() if len(row) > i_pa else ""
             maj_actuel = str(row[i_maj]).strip() if (i_maj is not None and len(row) > i_maj) else ""
             if entree:
