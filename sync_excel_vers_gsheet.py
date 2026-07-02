@@ -8,7 +8,7 @@ Lit les VALEURS en cache des formules (openpyxl/pandas) — donc PAS de #REF! (c
 
 Les colonnes calculées par l'app (Prix $, Pré G %, Pré YF, MAJ YF, …) ne sont jamais touchées.
 
-À LANCER EN LOCAL, avec le Python pythoncore (accès au dossier Google Drive local C:\Users\jfilt\My Drive).
+À LANCER EN LOCAL, avec le Python pythoncore (accès au dossier Google Drive local C:/Users/jfilt/My Drive).
 
 Pré-requis (préparation unique) :
   1. Installer les libs :  python -m pip install gspread pandas openpyxl
