@@ -257,7 +257,7 @@ def preparer_export_csv(df):
     return df_export.to_csv(index=False, sep=';').encode('utf-8-sig')
 
 # --- TITRE PRINCIPAL ---
-st.title("📈 BNC LIVE v6 (Google Sheet)")
+st.title("📈 BNC LIVE v6")
 
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
