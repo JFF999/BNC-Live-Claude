@@ -27,9 +27,9 @@ import pandas as pd
 import gspread
 
 # ======================== CONFIGURATION (à adapter) ========================
-CHEMIN_XLSX = r"G:\My Drive\Actions\Action_2026-c_New.xlsx"
+CHEMIN_XLSX = r"C:\Users\jfilt\My Drive\Actions\Action_2026-c_New.xlsx"
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"   # JSON du compte de service (local, hors Drive)
-CHEMIN_LOG = r"G:\My Drive\Actions\bnc_sync_log.txt"             # journal des exécutions
+CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"             # journal des exécutions
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 # Onglet -> config : nb de colonnes A.. à pousser, colonne Symbole, et plage des
