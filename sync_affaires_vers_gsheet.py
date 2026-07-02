@@ -21,7 +21,7 @@ import gspread
 
 # ======================== CONFIGURATION ========================
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
-CHEMIN_LOG = r"G:\My Drive\Actions\bnc_sync_log.txt"
+CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"
 NOM_SOURCE = "Surperformance_LesAffaires"
 NOM_DEST = "Action_2026-c_New"
 
