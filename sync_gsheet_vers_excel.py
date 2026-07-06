@@ -28,10 +28,12 @@ CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 # Feuille -> (première lettre, dernière lettre) de la zone à recopier vers l'Excel.
-# Inclut Pré Aff / MAJ Aff (donnees Les Affaires) ET les colonnes calculees par l'app.
+# NB : Pré Aff (I/D) et MAJ Aff (J/E) ne sont PLUS des valeurs fixes ecrites ici — ce sont
+# desormais des formules VLOOKUP alimentees par la feuille cachee Aff_Data (voir
+# setup_aff_vlookup.py), donc robustes au recalcul. On ne recopie que les colonnes calculees.
 ZONES = {
-    "Portefeuille BNC": ("I", "Q"),   # I=Pré Aff, J=MAJ Aff, K..Q = calculees
-    "Prospects": ("D", "I"),          # D=Pré Aff, E=MAJ Aff, F..I = calculees
+    "Portefeuille BNC": ("K", "Q"),   # K..Q = calculees par l'app
+    "Prospects": ("F", "I"),          # F..I = calculees par l'app
 }
 # En-tetes des colonnes DATE -> ecrites comme date Excel (serie). MAJ Aff arrive deja
 # en serie numerique (depuis le Sheet), MAJ YF en chaine -> les deux sont geres.
@@ -226,6 +228,21 @@ def main():
         z.close()
         modifs[chemin_xml] = modifier_xml_feuille(xml, colonnes, lettre_sym, map_symbole)
         journal(f"  [OK] {nom_feuille} : {len(map_symbole)} symboles correspondus ({debut}-{fin}).")
+
+    # Rafraichir la feuille cachee Aff_Data : source des formules VLOOKUP Pré Aff / MAJ Aff.
+    # (Alignement garanti au recalcul Excel, contrairement aux anciennes valeurs fixes.)
+    try:
+        from setup_aff_vlookup import lire_aff_data, construire_sheet_aff, XML_AFF
+        with zipfile.ZipFile(CHEMIN_XLSX) as zt:
+            aff_presente = XML_AFF in zt.namelist()
+        if aff_presente:
+            rows = lire_aff_data()
+            modifs[XML_AFF] = construire_sheet_aff(rows)
+            journal(f"  [OK] Aff_Data rafraichie : {len(rows)} symboles (Pré Aff / MAJ Aff).")
+        else:
+            journal("  [ATTENTION] Feuille Aff_Data absente - lancer setup_aff_vlookup.py une fois.")
+    except Exception as e:
+        journal(f"  [ATTENTION] Rafraichissement Aff_Data ignore : {type(e).__name__} - {e}")
 
     if modifs:
         reecrire_xlsx(CHEMIN_XLSX, modifs)
