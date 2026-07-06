@@ -180,69 +180,37 @@ def main():
         journal(f"ERREUR : JSON compte de service introuvable : {CHEMIN_CRED}")
         return
 
-    gc = gspread.service_account(filename=CHEMIN_CRED)
-    classeur = gc.open(NOM_GOOGLE_SHEET)
-    feuilles_xml = mapper_feuilles_xml(CHEMIN_XLSX)
-
+    # Toutes les colonnes reverses (Pré Aff, MAJ Aff ET colonnes calculees) sont desormais
+    # des formules VLOOKUP dans l'Excel. La synchro inverse ne touche donc PLUS aux feuilles
+    # visibles : elle reconstruit seulement les feuilles CACHEES (source des VLOOKUP), ce qui
+    # garantit l'alignement au recalcul Excel. (voir setup_aff_vlookup.py et vlookup_calc.py)
     modifs = {}
-    for nom_feuille, (debut, fin) in ZONES.items():
-        if nom_feuille not in feuilles_xml:
-            journal(f"  [ATTENTION] Feuille XML introuvable pour '{nom_feuille}' - ignoree.")
-            continue
+    with zipfile.ZipFile(CHEMIN_XLSX) as zt:
+        presents = set(zt.namelist())
 
-        # Valeurs BRUTES du Sheet (nombres = nombres, texte = texte)
-        ws = classeur.worksheet(nom_feuille)
-        donnees = ws.get_values(value_render_option=gspread.utils.ValueRenderOption.unformatted)
-        if not donnees:
-            journal(f"  [ATTENTION] '{nom_feuille}' : Sheet vide - ignore.")
-            continue
-        entetes = donnees[0]
-        if "Symbole" not in entetes:
-            journal(f"  [ATTENTION] '{nom_feuille}' : colonne Symbole absente - ignore.")
-            continue
-        idx_sym = entetes.index("Symbole")
-        lettre_sym = index_vers_lettre(idx_sym)
-
-        lettres = lettres_zone(debut, fin)
-        colonnes = []
-        for L in lettres:
-            idx = lettre_vers_index(L)
-            est_date = (idx < len(entetes) and str(entetes[idx]).strip() in COLS_DATE)
-            colonnes.append((L, est_date))
-
-        # symbole -> {lettre: valeur Sheet}  (correspondance par SYMBOLE, pas par position)
-        map_symbole = {}
-        for r in range(2, len(donnees) + 1):
-            ligne = donnees[r - 1]
-            sym = str(ligne[idx_sym]).strip() if idx_sym < len(ligne) else ""
-            if not sym or sym == "0":
-                continue
-            map_symbole[sym] = {
-                L: (ligne[lettre_vers_index(L)] if lettre_vers_index(L) < len(ligne) else "")
-                for L in lettres
-            }
-
-        chemin_xml = feuilles_xml[nom_feuille]
-        z = zipfile.ZipFile(CHEMIN_XLSX)
-        xml = z.read(chemin_xml).decode("utf-8", "replace")
-        z.close()
-        modifs[chemin_xml] = modifier_xml_feuille(xml, colonnes, lettre_sym, map_symbole)
-        journal(f"  [OK] {nom_feuille} : {len(map_symbole)} symboles correspondus ({debut}-{fin}).")
-
-    # Rafraichir la feuille cachee Aff_Data : source des formules VLOOKUP Pré Aff / MAJ Aff.
-    # (Alignement garanti au recalcul Excel, contrairement aux anciennes valeurs fixes.)
+    # Aff_Data : Pré Aff / MAJ Aff (partagee entre les deux onglets)
     try:
         from setup_aff_vlookup import lire_aff_data, construire_sheet_aff, XML_AFF
-        with zipfile.ZipFile(CHEMIN_XLSX) as zt:
-            aff_presente = XML_AFF in zt.namelist()
-        if aff_presente:
+        if XML_AFF in presents:
             rows = lire_aff_data()
             modifs[XML_AFF] = construire_sheet_aff(rows)
-            journal(f"  [OK] Aff_Data rafraichie : {len(rows)} symboles (Pré Aff / MAJ Aff).")
+            journal(f"  [OK] Aff_Data : {len(rows)} symboles (Pré Aff / MAJ Aff).")
         else:
-            journal("  [ATTENTION] Feuille Aff_Data absente - lancer setup_aff_vlookup.py une fois.")
+            journal("  [ATTENTION] Aff_Data absente - lancer setup_aff_vlookup.py une fois.")
     except Exception as e:
-        journal(f"  [ATTENTION] Rafraichissement Aff_Data ignore : {type(e).__name__} - {e}")
+        journal(f"  [ATTENTION] Aff_Data ignoree : {type(e).__name__} - {e}")
+
+    # Data_Pros / Data_Port : colonnes calculees par l'app
+    try:
+        from vlookup_calc import refresh_data_calc, SPECS
+        if all(s["data_xml"] in presents for s in SPECS):
+            for xmlname, xmlstr in refresh_data_calc().items():
+                modifs[xmlname] = xmlstr
+            journal("  [OK] Data_Pros / Data_Port : colonnes calculees rafraichies.")
+        else:
+            journal("  [ATTENTION] Data_Pros/Data_Port absentes - lancer vlookup_calc.py une fois.")
+    except Exception as e:
+        journal(f"  [ATTENTION] Data_Pros/Data_Port ignorees : {type(e).__name__} - {e}")
 
     if modifs:
         reecrire_xlsx(CHEMIN_XLSX, modifs)
