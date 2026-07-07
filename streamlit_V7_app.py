@@ -66,6 +66,22 @@ st.markdown("""
             padding: 10px 15px; margin-bottom: 15px; border-radius: 4px; font-size: 14px;
         }
         .alert-item { margin: 2px 0px; }
+
+        /* === v7 : sur MOBILE, garder Score min / Risque max côte à côte (Streamlit
+           empile les colonnes sur écran étroit). Les Signaux passent en pleine largeur. */
+        @media (max-width: 640px) {
+            div[data-testid="stHorizontalBlock"]:has(div[data-testid="stNumberInput"]) {
+                flex-direction: row !important; flex-wrap: wrap !important; gap: 10px !important;
+            }
+            div[data-testid="stHorizontalBlock"]:has(div[data-testid="stNumberInput"])
+                > div:has(div[data-testid="stNumberInput"]) {
+                width: calc(50% - 10px) !important; flex: 0 0 auto !important; min-width: 110px !important;
+            }
+            div[data-testid="stHorizontalBlock"]:has(div[data-testid="stNumberInput"])
+                > div:has(div[data-testid="stMultiSelect"]) {
+                width: 100% !important; flex: 1 1 100% !important;
+            }
+        }
     </style>
 """, unsafe_allow_html=True)
 
