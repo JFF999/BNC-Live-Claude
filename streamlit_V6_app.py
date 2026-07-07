@@ -508,37 +508,50 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                         prix_us = float(close_us.iloc[-1])
                         df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * (float(prix_actuel) / prix_us)
 
-            # === Pré Aff en $US ? Mise à l'échelle CAD INDÉPENDANTE de la branche Pré YF.
-            # La synchro Affaires apparie par symbole de base (NVDA -> NVDA.TO) : la cible du
-            # Sheet peut être en $US même quand Yahoo fournit une cible native pour le .TO
-            # (l'ancien scaling, logé dans le elif ci-dessus, était alors sauté -> Pré Aff 300 $US
-            # sur NVDA.TO). Règle de PLAUSIBILITÉ (évite de convertir une cible déjà en CAD,
-            # ex. MDA.TO) : on ne convertit QUE si la valeur brute implique un gain
-            # invraisemblable (> 200 %) ET que la valeur convertie redevient plausible.
+            # === Cibles en $US ? Mise à l'échelle CAD par PLAUSIBILITÉ, appliquée aux TROIS
+            # cibles : Pré Aff (synchro Affaires par symbole de base), cible Yahoo LIVE (Yahoo
+            # publie parfois la cible $US de la société sur la page du CDR .TO !) et Pré YF du
+            # Sheet (ancienne valeur non convertie). Règle : convertir par prix_CAD/prix_US
+            # UNIQUEMENT si le gain brut dépasse 200 % ET que le gain converti redevient
+            # plausible (ne touche jamais une cible déjà en CAD, ex. MDA.TO).
             if symbole_clean.endswith(('.TO', '.V', '.NE', '.CN')) and prix_actuel is not None and prix_actuel > 0:
-                aff_num = pd.to_numeric(pd.Series([row.get('Pré Aff')]), errors='coerce').iloc[0]
                 seuil = 200.0
-                if pd.notna(aff_num) and aff_num > 0:
-                    gain_brut_pct = (float(aff_num) - float(prix_actuel)) / float(prix_actuel) * 100
-                    if gain_brut_pct > seuil:
-                        us_candidat2 = symbole_clean
-                        for suff in ('.TO', '.V', '.NE', '.CN'):
-                            if us_candidat2.endswith(suff):
-                                us_candidat2 = us_candidat2[:-len(suff)]
-                                break
-                        donnees_us2 = dict_yahoo.get(us_candidat2, {})
-                        info_us2 = donnees_us2.get('info', {})
-                        hist_us2 = donnees_us2.get('hist', pd.DataFrame())
-                        nom_cad2 = infos_gen.get('longName') or infos_gen.get('shortName')
-                        nom_us2 = info_us2.get('longName') or info_us2.get('shortName')
-                        if (not hist_us2.empty and 'Close' in hist_us2.columns
-                                and _meme_societe(nom_cad2, nom_us2)):
-                            close_us2 = hist_us2['Close'].dropna()
-                            if len(close_us2) >= 1 and float(close_us2.iloc[-1]) > 0:
-                                aff_cad = float(aff_num) * (float(prix_actuel) / float(close_us2.iloc[-1]))
-                                gain_cad_pct = (aff_cad - float(prix_actuel)) / float(prix_actuel) * 100
-                                if gain_cad_pct <= seuil:
-                                    df.at[index, 'Pré Aff'] = aff_cad
+                prix_f = float(prix_actuel)
+                ratio_cad = None   # None = pas encore calculé ; False = indisponible
+
+                def _ratio_us():
+                    us_c = symbole_clean
+                    for suff in ('.TO', '.V', '.NE', '.CN'):
+                        if us_c.endswith(suff):
+                            us_c = us_c[:-len(suff)]
+                            break
+                    d_us = dict_yahoo.get(us_c, {})
+                    h_us = d_us.get('hist', pd.DataFrame())
+                    i_us = d_us.get('info', {})
+                    nom_c = infos_gen.get('longName') or infos_gen.get('shortName')
+                    nom_u = i_us.get('longName') or i_us.get('shortName')
+                    if h_us.empty or 'Close' not in h_us.columns or not _meme_societe(nom_c, nom_u):
+                        return False
+                    c_us = h_us['Close'].dropna()
+                    if len(c_us) < 1 or float(c_us.iloc[-1]) <= 0:
+                        return False
+                    return prix_f / float(c_us.iloc[-1])
+
+                for col_cible in ('Pré Aff', 'Pré 1an $ Yahoo', 'Pré YF'):
+                    if col_cible not in df.columns:
+                        continue
+                    num = pd.to_numeric(pd.Series([df.at[index, col_cible]]), errors='coerce').iloc[0]
+                    if pd.isna(num) or num <= 0:
+                        continue
+                    if (float(num) - prix_f) / prix_f * 100 <= seuil:
+                        continue   # plausible -> on ne touche pas
+                    if ratio_cad is None:
+                        ratio_cad = _ratio_us()
+                    if not ratio_cad:
+                        continue
+                    conv = float(num) * ratio_cad
+                    if (conv - prix_f) / prix_f * 100 <= seuil:
+                        df.at[index, col_cible] = conv
 
             # === V4 : nombre d'analystes derrière l'objectif (fiabilité du signal) ===
             nb_analystes = infos_gen.get('numberOfAnalystOpinions')
