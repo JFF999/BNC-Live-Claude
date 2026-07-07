@@ -1058,7 +1058,7 @@ def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, lar
 
 def config_colonnes_communes():
     # Configuration d'affichage partagée par tous les tableaux (idée reprise de Codex).
-    return {
+    cfg = {
         "No.": st.column_config.NumberColumn("No.", format="%d"),
         "Qtée": st.column_config.NumberColumn("Qtée", format="%d"),
         "Symbole": st.column_config.LinkColumn("Symbole", display_text=r"https://ca\.finance\.yahoo\.com/quote/(.*)"),
@@ -1093,6 +1093,11 @@ def config_colonnes_communes():
         "MAJ YF": st.column_config.TextColumn("Date YF", width="small"),
         "MAJ Aff": st.column_config.TextColumn("Date Aff", width="small"),
     }
+    # === v7 : sur MOBILE, le Rang en simple chiffre (la barre de progression est
+    # trop large pour un petit écran). Sur ordinateur, barre inchangée.
+    if globals().get('mode_mobile'):
+        cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
+    return cfg
 
 try:
     with st.spinner("Connexion à Google Sheets..."):
