@@ -1122,7 +1122,11 @@ try:
             )
             if voir_aff_cad:
                 aff_cad = pd.to_numeric(df_prospects_cad.get("Pré Aff Display"), errors="coerce")
-                masque_cad = masque_cad | (aff_cad.notna() & (aff_cad != 0))
+                perime_cad = df_prospects_cad.get("Pré Aff Périmé")
+                if perime_cad is None:
+                    perime_cad = pd.Series(False, index=df_prospects_cad.index)
+                # uniquement les prévisions NON périmées (non grisées)
+                masque_cad = masque_cad | (aff_cad.notna() & (aff_cad != 0) & ~perime_cad.fillna(False).astype(bool))
             df_prospects_cad = df_prospects_cad[masque_cad].sort_values(
                 by=["Score", "Confiance"], ascending=[False, False], na_position="last")
 
@@ -1167,7 +1171,11 @@ try:
             )
             if voir_aff_us:
                 aff_us = pd.to_numeric(df_prospects_usd.get("Pré Aff Display"), errors="coerce")
-                masque_us = masque_us | (aff_us.notna() & (aff_us != 0))
+                perime_us = df_prospects_usd.get("Pré Aff Périmé")
+                if perime_us is None:
+                    perime_us = pd.Series(False, index=df_prospects_usd.index)
+                # uniquement les prévisions NON périmées (non grisées)
+                masque_us = masque_us | (aff_us.notna() & (aff_us != 0) & ~perime_us.fillna(False).astype(bool))
             df_prospects_usd = df_prospects_usd[masque_us].sort_values(
                 by=["Score", "Confiance"], ascending=[False, False], na_position="last")
 
