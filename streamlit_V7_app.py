@@ -1349,6 +1349,21 @@ def config_largeur_description(df, afficher, px_par_char=8, largeur_min=120, lar
     except Exception:
         return {"Description": st.column_config.TextColumn("Description", width="large")}
 
+def config_largeur_pourquoi(df, largeur_max=1100):
+    # === v7 : largeur de la colonne Pourquoi calée sur le motif le plus long, pour
+    # occuper l'écran d'un PC (sur mobile la colonne n'est pas affichée de toute façon).
+    if 'Pourquoi' not in df.columns:
+        return {}
+    longueurs = df['Pourquoi'].dropna().astype(str).map(len)
+    max_len = int(longueurs.max()) if len(longueurs) > 0 else 0
+    if max_len <= 0:
+        return {}
+    largeur = int(min(max(max_len * 7 + 16, 220), largeur_max))
+    try:
+        return {"Pourquoi": st.column_config.TextColumn("Pourquoi", width=largeur)}
+    except Exception:
+        return {"Pourquoi": st.column_config.TextColumn("Pourquoi", width="large")}
+
 def config_colonnes_communes():
     # Configuration d'affichage partagée par tous les tableaux (idée reprise de Codex).
     cfg = {
@@ -1793,18 +1808,8 @@ try:
                 possede = pd.Series(False, index=df_live_prospects.index)
             possede = possede.fillna(False).astype(bool)
 
-            # Colonne Pourquoi élargie pour montrer TOUT le texte (largeur calée sur le
-            # plus long motif présent, comme pour Description).
-            config_dec = config_colonnes_communes()
-            if "Pourquoi" in df_live_prospects.columns:
-                longueurs_pq = df_live_prospects["Pourquoi"].dropna().astype(str).map(len)
-                max_pq = int(longueurs_pq.max()) if len(longueurs_pq) > 0 else 0
-                if max_pq > 0:
-                    largeur_pq = int(min(max(max_pq * 7 + 16, 200), 900))
-                    try:
-                        config_dec["Pourquoi"] = st.column_config.TextColumn("Pourquoi", width=largeur_pq)
-                    except Exception:
-                        config_dec["Pourquoi"] = st.column_config.TextColumn("Pourquoi", width="large")
+            # Colonne Pourquoi élargie pour montrer TOUT le texte (helper partagé).
+            config_dec = {**config_colonnes_communes(), **config_largeur_pourquoi(df_live_prospects)}
 
             sections = (
                 ("🏆 Top 5 achats CAD 🇨🇦 — non détenus", "CAD", False),
@@ -1969,7 +1974,8 @@ try:
             styled_cad,
             use_container_width=False, hide_index=True, height=(len(df_prospects_cad) * 35) + 43,
             column_order=colonnes_a_afficher_pros,
-            column_config={**config_description, **config_colonnes_communes()}
+            column_config={**config_description, **config_colonnes_communes(),
+                           **config_largeur_pourquoi(df_prospects_cad)}
         )
 
     # --- ONGLET 3 : PROSPECTS US ---
@@ -2023,7 +2029,8 @@ try:
             styled_usd,
             use_container_width=False, hide_index=True, height=(len(df_prospects_usd) * 35) + 43,
             column_order=colonnes_a_afficher_pros_us,
-            column_config={**config_description, **config_colonnes_communes()}
+            column_config={**config_description, **config_colonnes_communes(),
+                           **config_largeur_pourquoi(df_prospects_usd)}
         )
 
     # --- ONGLET 4 : MÉTHODE ---
