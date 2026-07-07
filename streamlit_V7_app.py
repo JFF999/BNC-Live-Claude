@@ -471,8 +471,9 @@ st.title("📈 BNC LIVE v7")
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
 
-# --- HAUT DE PAGE : Paramètres ---
-col_param, col_btn = st.columns(2)
+# --- HAUT DE PAGE : Paramètres + Rafraîchir + Sheet sur UNE seule ligne ---
+# (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
+col_param, col_refresh, col_sheet = st.columns(3)
 
 # Libellés compacts sur mobile (mode connu AVANT le popover grâce à la préférence
 # persistée ; « Auto » retombe sur la détection User-Agent).
@@ -636,14 +637,12 @@ def url_google_sheet():
     except Exception:
         return ""
 
-with col_btn:
-    c_refresh, c_sheet = st.columns(2)
-    if c_refresh.button(f"🔄 Rafraîchir ({heure_actuelle})"):
-        st.cache_data.clear()
-        st.rerun()
-    url_sheet = url_google_sheet()
-    if url_sheet:
-        c_sheet.link_button("📗 Sheet" if mobile_ui else "📗 Ouvrir Sheet", url_sheet)
+if col_refresh.button(f"🔄 {heure_actuelle}" if mobile_ui else f"🔄 Rafraîchir ({heure_actuelle})"):
+    st.cache_data.clear()
+    st.rerun()
+url_sheet = url_google_sheet()
+if url_sheet:
+    col_sheet.link_button("📗 Sheet" if mobile_ui else "📗 Ouvrir Sheet", url_sheet)
 
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
