@@ -520,7 +520,7 @@ with col_param:
         afficher_gain_jour = st.checkbox("Calculer le Gain du Jour", value=pref_bool('afficher_gain_jour', True))
         afficher_bandeau = st.checkbox("Afficher le Bandeau des Marchés", value=pref_bool('afficher_bandeau', False))
         afficher_alertes = st.checkbox("Activer les Alertes Intelligentes", value=pref_bool('afficher_alertes', False))
-        rafraichir_auto = st.checkbox("Rafraîchir automatiquement à l'ouverture de la bourse",
+        rafraichir_auto = st.checkbox("Rafraîchir auto (à l'ouverture + aux 10 min en séance)",
                                       value=pref_bool('rafraichir_auto', True))
 
         # === V4 : garde-fou sur la fiabilité de l'objectif Yahoo ===
@@ -643,23 +643,31 @@ with col_btn:
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
 
-# === v7 : rafraîchissement AUTO à l'ouverture de la bourse ===
-# Si l'app est ouverte avant 9 h 30, un minuteur recharge la page pile à l'ouverture ;
-# le cache (5 min) étant expiré, les données repartent fraîches. Fenêtre max 3 h pour
-# ne pas recharger un onglet oublié la veille.
+# === v7 : rafraîchissement AUTO ===
+# - Bourse OUVERTE : recharge toutes les 10 min (cache 5 min expiré -> données fraîches).
+# - Bourse FERMÉE : si l'app est ouverte avant 9 h 30 (fenêtre max 3 h), recharge pile
+#   à l'ouverture. Un onglet oublié la veille ne recharge pas au milieu de la nuit.
 note_auto = ""
-if rafraichir_auto and not (ouvert_us or ouvert_ca):
-    _prochaine = prochaine_ouverture()
-    if _prochaine is not None:
-        _delai_s = (_prochaine - datetime.now(ZoneInfo("America/Toronto"))).total_seconds()
-        if 0 < _delai_s <= 3 * 3600:
-            components.html(
-                f"<script>setTimeout(function() {{ window.parent.location.reload(); }}, "
-                f"{int(_delai_s * 1000)});</script>",
-                height=0
-            )
-            note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
-                         f"{_prochaine.strftime('%H:%M')}</span>")
+if rafraichir_auto:
+    if ouvert_us or ouvert_ca:
+        components.html(
+            "<script>setTimeout(function() { window.parent.location.reload(); }, "
+            f"{10 * 60 * 1000});</script>",
+            height=0
+        )
+        note_auto = " &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto aux 10 min</span>"
+    else:
+        _prochaine = prochaine_ouverture()
+        if _prochaine is not None:
+            _delai_s = (_prochaine - datetime.now(ZoneInfo("America/Toronto"))).total_seconds()
+            if 0 < _delai_s <= 3 * 3600:
+                components.html(
+                    f"<script>setTimeout(function() {{ window.parent.location.reload(); }}, "
+                    f"{int(_delai_s * 1000)});</script>",
+                    height=0
+                )
+                note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
+                             f"{_prochaine.strftime('%H:%M')}</span>")
 
 st.markdown(
     f"<div style='font-size: 13px; margin-top: -6px; margin-bottom: 6px;'>"
