@@ -1009,7 +1009,7 @@ try:
             st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
 
         with cols_s[idx_tri]:
-            colonne_tri = st.selectbox("Tri", ["Pré G %", "Gain %"], key="tri_portefeuille", label_visibility="collapsed")
+            colonne_tri = st.selectbox("Tri", ["Pré G %", "Gain %"], index=1, key="tri_portefeuille", label_visibility="collapsed")
 
         # Pré G % se trie en ordre CROISSANT (titres proches/au-dessus de l'objectif = à surveiller en haut).
         if colonne_tri == "Pré G %":
@@ -1099,9 +1099,18 @@ try:
             "Signaux", SIGNAUX,
             default=["Priorité", "À surveiller", "À valider"], key="cad_signal_filter"
         )
+        voir_aff_cad = st.checkbox(
+            "Voir tous les titres ayant une prévision Les Affaires (ignore Score / Risque / Signaux)",
+            key="cad_voir_aff"
+        )
 
         df_prospects_cad = df_live_prospects[df_live_prospects['Devise'] == 'CAD'].copy()
-        if "Score" in df_prospects_cad.columns:
+        if voir_aff_cad:
+            aff_cad = pd.to_numeric(df_prospects_cad.get("Pré Aff Display"), errors="coerce")
+            df_prospects_cad = df_prospects_cad[aff_cad.notna() & (aff_cad != 0)].sort_values(
+                by="Pré G %", ascending=False, na_position="last"
+            )
+        elif "Score" in df_prospects_cad.columns:
             df_prospects_cad = df_prospects_cad[
                 df_prospects_cad["Score"].fillna(0).ge(min_score_cad)
                 & df_prospects_cad["Risque"].fillna(100).le(max_risque_cad)
@@ -1135,9 +1144,18 @@ try:
             "Signaux", SIGNAUX,
             default=["Priorité", "À surveiller", "À valider"], key="usd_signal_filter"
         )
+        voir_aff_us = st.checkbox(
+            "Voir tous les titres ayant une prévision Les Affaires (ignore Score / Risque / Signaux)",
+            key="usd_voir_aff"
+        )
 
         df_prospects_usd = df_live_prospects[df_live_prospects['Devise'] == 'USD'].copy()
-        if "Score" in df_prospects_usd.columns:
+        if voir_aff_us:
+            aff_us = pd.to_numeric(df_prospects_usd.get("Pré Aff Display"), errors="coerce")
+            df_prospects_usd = df_prospects_usd[aff_us.notna() & (aff_us != 0)].sort_values(
+                by="Pré G %", ascending=False, na_position="last"
+            )
+        elif "Score" in df_prospects_usd.columns:
             df_prospects_usd = df_prospects_usd[
                 df_prospects_usd["Score"].fillna(0).ge(min_score_us)
                 & df_prospects_usd["Risque"].fillna(100).le(max_risque_us)
