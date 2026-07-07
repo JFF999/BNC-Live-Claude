@@ -875,8 +875,11 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 info_us = donnees_us.get('info', {})
                 cible_us = info_us.get('targetMeanPrice')
                 hist_us = donnees_us.get('hist', pd.DataFrame())
-                # Garde-fou anti-collision : même société (nom Yahoo) côté CAD et US
-                nom_cad = infos_gen.get('longName') or infos_gen.get('shortName')
+                # Garde-fou anti-collision : même société (nom Yahoo) côté CAD et US.
+                # Si le .info du ticker CAD manque (blocage Yahoo), on se rabat sur la
+                # Description du Sheet (toujours disponible).
+                nom_cad = (infos_gen.get('longName') or infos_gen.get('shortName')
+                           or row.get('Description'))
                 nom_us = info_us.get('longName') or info_us.get('shortName')
                 if (cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns
                         and _meme_societe(nom_cad, nom_us)):
@@ -906,7 +909,9 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                     d_us = dict_yahoo.get(us_c, {})
                     h_us = d_us.get('hist', pd.DataFrame())
                     i_us = d_us.get('info', {})
-                    nom_c = infos_gen.get('longName') or infos_gen.get('shortName')
+                    # nom Yahoo, sinon Description du Sheet (le .info du CAD peut manquer)
+                    nom_c = (infos_gen.get('longName') or infos_gen.get('shortName')
+                             or row.get('Description'))
                     nom_u = i_us.get('longName') or i_us.get('shortName')
                     if h_us.empty or 'Close' not in h_us.columns or not _meme_societe(nom_c, nom_u):
                         return False
@@ -1038,12 +1043,30 @@ def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0, 
         perime = dates_aff.notna() & (dates_aff < seuil) & affaires.notna()
     affaires_calc = affaires.where(~perime, np.nan)   # ignorée dans le calcul si périmée
 
+    # === v7 : cible individuellement ABERRANTE écartée de la moyenne ===
+    # Si UNE des deux cibles implique un gain invraisemblable (> plafond) alors que
+    # l'AUTRE est plausible, l'aberrante est exclue du calcul (et grisée pour Pré Aff)
+    # au lieu de polluer la moyenne. Filet de sécurité quand la conversion CAD n'a pas
+    # pu s'exécuter (ex. NVDA.TO : Aff 300 $US non convertie vs Yahoo 67 $ plausible).
+    yahoo_calc = yahoo
+    if plafond_preg and plafond_preg > 0:
+        seuil_ab = float(plafond_preg)
+        gain_y = (yahoo - prix) / prix * 100
+        gain_a = (affaires_calc - prix) / prix * 100
+        y_ab = yahoo.notna() & (prix > 0) & (gain_y > seuil_ab)
+        a_ab = affaires_calc.notna() & (prix > 0) & (gain_a > seuil_ab)
+        excl_a = a_ab & yahoo.notna() & ~y_ab
+        excl_y = y_ab & affaires_calc.notna() & ~a_ab
+        affaires_calc = affaires_calc.where(~excl_a, np.nan)
+        yahoo_calc = yahoo.where(~excl_y, np.nan)
+        perime = perime | excl_a   # grise la Pré Aff écartée à l'affichage
+
     if source == "Yahoo":
-        cible = yahoo.fillna(affaires_calc)
+        cible = yahoo_calc.fillna(affaires_calc)
     elif source == "Affaires":
-        cible = affaires_calc.fillna(yahoo)
+        cible = affaires_calc.fillna(yahoo_calc)
     else:
-        temp = pd.DataFrame({'Y': yahoo, 'A': affaires_calc})
+        temp = pd.DataFrame({'Y': yahoo_calc, 'A': affaires_calc})
         cible = temp.mean(axis=1, skipna=True)
 
     mask = (prix > 0) & cible.notna()
