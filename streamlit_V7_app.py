@@ -588,10 +588,22 @@ with col_param:
             CFG_APP = st.session_state['config_app']
             st.toast("⚙️ Préférences enregistrées.", icon="💾")
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def url_google_sheet():
+    # URL du Google Sheet (via gspread) pour le bouton « Ouvrir Sheet ».
+    try:
+        return connecter_google_sheets().url
+    except Exception:
+        return ""
+
 with col_btn:
-    if st.button(f"🔄 Rafraîchir ({heure_actuelle})"):
+    c_refresh, c_sheet = st.columns(2)
+    if c_refresh.button(f"🔄 Rafraîchir ({heure_actuelle})"):
         st.cache_data.clear()
         st.rerun()
+    url_sheet = url_google_sheet()
+    if url_sheet:
+        c_sheet.link_button("📗 Ouvrir Sheet", url_sheet)
 
 # --- MOTEUR TURBO ---
 # === V4 : récupération Yahoo refondue ===========================================
