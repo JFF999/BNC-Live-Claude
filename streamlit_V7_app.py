@@ -295,9 +295,10 @@ def _num(v, defaut=None):
     n = pd.to_numeric(pd.Series([v]), errors='coerce').iloc[0]
     return defaut if pd.isna(n) else float(n)
 
-def journaliser_signaux(df_port, df_pros):
+def journaliser_signaux(df_port, df_pros, valeur_port=None, indices=None):
     """Ajoute les signaux du jour à l'onglet Journal (créé au besoin, 1 fois/jour).
-    Renvoie (journal_complet: list[list], ecrit_aujourdhui: bool)."""
+    v7+ : archive aussi la VALEUR du portefeuille et les indices (Type=Valeur) pour la
+    courbe « Portefeuille vs marché ». Renvoie (journal_complet, ecrit_aujourdhui)."""
     try:
         sh = connecter_google_sheets()
         try:
@@ -328,11 +329,140 @@ def journaliser_signaux(df_port, df_pros):
                         continue
                     lignes.append([aujourdhui, "Vente", str(r.get("Symbole Brut") or ""), "Vendre",
                                    round(prix, 2), "", round(_num(r.get("Pré G %"), 0), 1)])
+        # === Valeur du portefeuille + indices (courbe « vs marché ») ===
+        v = _num(valeur_port)
+        if v is not None and v > 0:
+            lignes.append([aujourdhui, "Valeur", "PORTEFEUILLE", "", round(v, 2), "", ""])
+        for sym_i, val_i in (indices or {}).items():
+            vi = _num(val_i)
+            if vi is not None and vi > 0:
+                lignes.append([aujourdhui, "Valeur", sym_i, "", round(vi, 2), "", ""])
         if lignes:
             ws.append_rows(lignes, value_input_option="USER_ENTERED")
         return vals + lignes, bool(lignes)
     except Exception:
         return [], False
+
+# === v7 : PRÉFÉRENCES PERSISTÉES (onglet « Config » du Sheet) =====================
+# Les réglages de ⚙️ Paramètres sont enregistrés à chaque changement et rechargés à
+# l'ouverture : plus besoin de tout recocher à chaque session.
+# ==================================================================================
+def charger_config_app():
+    try:
+        sh = connecter_google_sheets()
+        ws = sh.worksheet("Config")
+        vals = ws.get_all_values()
+        return {r[0]: r[1] for r in vals[1:] if len(r) >= 2 and r[0]}
+    except Exception:
+        return {}
+
+def sauvegarder_config_app(cfg):
+    try:
+        sh = connecter_google_sheets()
+        try:
+            ws = sh.worksheet("Config")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet("Config", rows=80, cols=2)
+        ws.clear()
+        ws.update([["Paramètre", "Valeur"]] + [[k, v] for k, v in sorted(cfg.items())])
+        return True
+    except Exception:
+        return False
+
+if 'config_app' not in st.session_state:
+    st.session_state['config_app'] = charger_config_app()
+CFG_APP = st.session_state['config_app']
+
+def pref_bool(nom, defaut):
+    v = CFG_APP.get(nom)
+    return (v == "1") if v in ("0", "1") else defaut
+
+def pref_int(nom, defaut):
+    try:
+        return int(float(CFG_APP.get(nom)))
+    except (TypeError, ValueError):
+        return defaut
+
+def pref_index(nom, options, defaut):
+    v = CFG_APP.get(nom)
+    return options.index(v) if v in options else defaut
+
+# === v7 : CACHE YF (onglet « CacheYF » du Sheet) ==================================
+# Sauvegarde les champs issus du .info Yahoo (chaleur, dividende, volatilité, secteur,
+# fondamentaux) + le Rang d'achat. Deux usages :
+#   1. SECOURS quand Yahoo bloque .info : les champs manquants sont repris du cache,
+#      donc Score et Rang restent STABLES au lieu de changer artificiellement.
+#   2. Le script bnc_alertes.py lit le Rang ici pour l'alerte « nouveau Top 5 ».
+# ==================================================================================
+ENTETE_CACHE_YF = ["Symbole", "Devise", "Possede", "Achat Rang", "Chaleur 52s", "Div %",
+                   "Volatilité 1m", "Nb Analystes", "Secteur", "P/E", "Croiss Rev %",
+                   "Marge %", "MAJ"]
+CHAMPS_NUM_CACHE = ["Chaleur 52s", "Div %", "Volatilité 1m", "Nb Analystes", "P/E",
+                    "Croiss Rev %", "Marge %"]
+
+def charger_cache_yf():
+    try:
+        sh = connecter_google_sheets()
+        ws = sh.worksheet("CacheYF")
+        vals = ws.get_all_values()
+        if not vals:
+            return {}
+        ent = vals[0]
+        return {r[0]: dict(zip(ent, r)) for r in vals[1:] if r and r[0]}
+    except Exception:
+        return {}
+
+def appliquer_cache_yf(df, cache):
+    """Complète les champs .info MANQUANTS avec le cache (jamais d'écrasement)."""
+    if not cache or df.empty:
+        return df
+    for idx, row in df.iterrows():
+        sym = str(row.get('Symbole Brut') or '').strip()
+        c = cache.get(sym)
+        if not c:
+            continue
+        for col in CHAMPS_NUM_CACHE:
+            if col in df.columns and pd.isna(row.get(col)):
+                v = pd.to_numeric(pd.Series([c.get(col)]), errors='coerce').iloc[0]
+                if pd.notna(v):
+                    df.at[idx, col] = float(v)
+        if 'Secteur' in df.columns and not str(row.get('Secteur') or '').strip():
+            if str(c.get('Secteur') or '').strip():
+                df.at[idx, 'Secteur'] = c['Secteur']
+    return df
+
+def sauvegarder_cache_yf(df_port, df_pros):
+    try:
+        sh = connecter_google_sheets()
+        try:
+            ws = sh.worksheet("CacheYF")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet("CacheYF", rows=600, cols=len(ENTETE_CACHE_YF))
+        maj = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d %H:%M")
+        lignes = [ENTETE_CACHE_YF]
+        vus = set()
+        for df_ in (df_pros, df_port):
+            if df_ is None or df_.empty:
+                continue
+            for _, r in df_.iterrows():
+                sym = str(r.get('Symbole Brut') or '').strip()
+                if not sym or sym in vus:
+                    continue
+                vus.add(sym)
+                def n(col):
+                    v = pd.to_numeric(pd.Series([r.get(col)]), errors='coerce').iloc[0]
+                    return "" if pd.isna(v) else round(float(v), 4)
+                lignes.append([sym, str(r.get('Devise') or ''),
+                               "1" if bool(r.get('Possede')) else "0",
+                               n('Achat Rang'), n('Chaleur 52s'), n('Div %'),
+                               n('Volatilité 1m'), n('Nb Analystes'),
+                               str(r.get('Secteur') or ''), n('P/E'),
+                               n('Croiss Rev %'), n('Marge %'), maj])
+        ws.clear()
+        ws.update(lignes)
+        return True
+    except Exception:
+        return False
 
 # --- TITRE PRINCIPAL ---
 st.title("📈 BNC LIVE v7")
@@ -345,13 +475,15 @@ col_param, col_btn = st.columns(2)
 
 with col_param:
     with st.popover("⚙️ Paramètres"):
-        source_gain = st.selectbox("Calcul du Gain", ["Yahoo", "Affaires", "Moyenne"], index=2)
+        OPTIONS_GAIN = ["Yahoo", "Affaires", "Moyenne"]
+        source_gain = st.selectbox("Calcul du Gain", OPTIONS_GAIN,
+                                   index=pref_index('source_gain', OPTIONS_GAIN, 2))
 
         # === v7 : mode d'affichage — sur téléphone, colonnes ESSENTIELLES seulement ===
+        OPTIONS_MODE = ["Auto (détection)", "Ordinateur (complet)", "Mobile (essentiel)"]
         mode_affichage = st.selectbox(
-            "Mode d'affichage",
-            ["Auto (détection)", "Ordinateur (complet)", "Mobile (essentiel)"],
-            index=0
+            "Mode d'affichage", OPTIONS_MODE,
+            index=pref_index('mode_affichage', OPTIONS_MODE, 0)
         )
         if mode_affichage == "Mobile (essentiel)":
             mode_mobile = True
@@ -362,45 +494,45 @@ with col_param:
 
         st.markdown("---")
         st.markdown("**Affichage des Colonnes**")
-        afficher_no = st.checkbox("Afficher No.", value=True)
-        afficher_desc = st.checkbox("Afficher Description", value=True)
-        afficher_dev = st.checkbox("Afficher Devise (Dev.)", value=False)
-        afficher_compte = st.checkbox("Afficher Compte", value=True)
+        afficher_no = st.checkbox("Afficher No.", value=pref_bool('afficher_no', True))
+        afficher_desc = st.checkbox("Afficher Description", value=pref_bool('afficher_desc', True))
+        afficher_dev = st.checkbox("Afficher Devise (Dev.)", value=pref_bool('afficher_dev', False))
+        afficher_compte = st.checkbox("Afficher Compte", value=pref_bool('afficher_compte', True))
 
-        afficher_var = st.checkbox("Afficher Var %", value=True)
-        afficher_tendance = st.checkbox("Afficher Tendance (1m)", value=False)
-        afficher_chaleur = st.checkbox("Afficher Chaleur 52 sem.", value=False)
-        afficher_div = st.checkbox("Afficher Dividendes (Div %)", value=False)
-        afficher_analystes = st.checkbox("Afficher Nb d'analystes", value=False)  # === V4 ===
+        afficher_var = st.checkbox("Afficher Var %", value=pref_bool('afficher_var', True))
+        afficher_tendance = st.checkbox("Afficher Tendance (1m)", value=pref_bool('afficher_tendance', False))
+        afficher_chaleur = st.checkbox("Afficher Chaleur 52 sem.", value=pref_bool('afficher_chaleur', False))
+        afficher_div = st.checkbox("Afficher Dividendes (Div %)", value=pref_bool('afficher_div', False))
+        afficher_analystes = st.checkbox("Afficher Nb d'analystes", value=pref_bool('afficher_analystes', False))  # === V4 ===
 
         st.markdown("---")
         st.markdown("**Moteur de décision (v5)**")
-        afficher_signal = st.checkbox("Afficher Signal", value=True)
-        afficher_score = st.checkbox("Afficher Score", value=True)
-        afficher_confiance = st.checkbox("Afficher Confiance", value=True)
-        afficher_risque = st.checkbox("Afficher Risque", value=True)
-        afficher_volatilite = st.checkbox("Afficher Volatilité", value=False)
+        afficher_signal = st.checkbox("Afficher Signal", value=pref_bool('afficher_signal', True))
+        afficher_score = st.checkbox("Afficher Score", value=pref_bool('afficher_score', True))
+        afficher_confiance = st.checkbox("Afficher Confiance", value=pref_bool('afficher_confiance', True))
+        afficher_risque = st.checkbox("Afficher Risque", value=pref_bool('afficher_risque', True))
+        afficher_volatilite = st.checkbox("Afficher Volatilité", value=pref_bool('afficher_volatilite', False))
 
         st.markdown("---")
         st.markdown("**Fonctionnalités Avancées**")
-        activer_taux_change = st.checkbox("Taux de change actif", value=False)
-        afficher_gain_jour = st.checkbox("Calculer le Gain du Jour", value=True)
-        afficher_bandeau = st.checkbox("Afficher le Bandeau des Marchés", value=False)
-        afficher_alertes = st.checkbox("Activer les Alertes Intelligentes", value=False)
+        activer_taux_change = st.checkbox("Taux de change actif", value=pref_bool('activer_taux_change', False))
+        afficher_gain_jour = st.checkbox("Calculer le Gain du Jour", value=pref_bool('afficher_gain_jour', True))
+        afficher_bandeau = st.checkbox("Afficher le Bandeau des Marchés", value=pref_bool('afficher_bandeau', False))
+        afficher_alertes = st.checkbox("Activer les Alertes Intelligentes", value=pref_bool('afficher_alertes', False))
 
         # === V4 : garde-fou sur la fiabilité de l'objectif Yahoo ===
         # Un targetMeanPrice basé sur 1 seul analyste ne vaut rien. On peut exiger
         # un minimum d'analystes : en dessous, l'objectif Yahoo est ignoré.
         min_analystes = st.number_input(
             "Min. d'analystes pour l'objectif Yahoo (0 = désactivé)",
-            min_value=0, max_value=50, value=0, step=1
+            min_value=0, max_value=50, value=pref_int('min_analystes', 0), step=1
         )
 
         # Pré Aff périmée : ignorée dans le calcul du Pré G % si la prévision (MAJ Aff)
         # date de plus de N mois. La valeur reste affichée mais grisée. 0 = jamais ignorée.
         mois_max_aff = st.number_input(
             "Ignorer Pré Aff si la prévision date de plus de (mois, 0 = jamais)",
-            min_value=0, max_value=60, value=6, step=1
+            min_value=0, max_value=60, value=pref_int('mois_max_aff', 6), step=1
         )
 
         # === v7 : garde-fou anti-aberration ===
@@ -409,25 +541,52 @@ with col_param:
         # le score / le rang d'achat. 0 = jamais.
         plafond_preg = st.number_input(
             "Signaler Pré G % au-dessus de (%, 0 = jamais)",
-            min_value=0, max_value=1000, value=200, step=25
+            min_value=0, max_value=1000, value=pref_int('plafond_preg', 200), step=25
         )
 
         st.markdown("---")
         st.markdown("**Aide à la décision (v7)**")
-        afficher_rang = st.checkbox("Afficher Rang d'achat", value=True)
-        afficher_pourquoi = st.checkbox("Afficher Pourquoi", value=True)
-        afficher_percentile = st.checkbox("Afficher Rang % (percentile)", value=False)
-        afficher_concordance = st.checkbox("Afficher Concordance", value=False)
-        afficher_entree = st.checkbox("Afficher Qualité d'entrée", value=False)
-        afficher_secteur = st.checkbox("Afficher Secteur", value=False)
-        trier_par_rang = st.checkbox("Trier les Prospects par Rang d'achat", value=True)
-        afficher_baisse = st.checkbox("Afficher Baisse depuis sommet 52s (Portefeuille)", value=False)
+        afficher_rang = st.checkbox("Afficher Rang d'achat", value=pref_bool('afficher_rang', True))
+        afficher_pourquoi = st.checkbox("Afficher Pourquoi", value=pref_bool('afficher_pourquoi', True))
+        afficher_percentile = st.checkbox("Afficher Rang % (percentile)", value=pref_bool('afficher_percentile', False))
+        afficher_concordance = st.checkbox("Afficher Concordance", value=pref_bool('afficher_concordance', False))
+        afficher_entree = st.checkbox("Afficher Qualité d'entrée", value=pref_bool('afficher_entree', False))
+        afficher_secteur = st.checkbox("Afficher Secteur", value=pref_bool('afficher_secteur', False))
+        trier_par_rang = st.checkbox("Trier les Prospects par Rang d'achat", value=pref_bool('trier_par_rang', True))
+        afficher_baisse = st.checkbox("Afficher Baisse depuis sommet 52s (Portefeuille)", value=pref_bool('afficher_baisse', False))
         seuil_baisse = st.number_input(
             "Alerte si baisse depuis le sommet dépasse (%)",
-            min_value=5, max_value=50, value=15, step=5
+            min_value=5, max_value=50, value=pref_int('seuil_baisse', 15), step=5
         )
-        afficher_fondamentaux = st.checkbox("Afficher Fondamentaux (P/E, croiss., marge)", value=False)
-        journaliser = st.checkbox("Journaliser les signaux (onglet Journal du Sheet)", value=True)
+        afficher_fondamentaux = st.checkbox("Afficher Fondamentaux (P/E, croiss., marge)", value=pref_bool('afficher_fondamentaux', False))
+        journaliser = st.checkbox("Journaliser les signaux (onglet Journal du Sheet)", value=pref_bool('journaliser', True))
+
+    # === v7 : sauvegarde silencieuse des préférences quand elles changent ===
+    cfg_courant = {
+        'source_gain': source_gain, 'mode_affichage': mode_affichage,
+        'min_analystes': str(min_analystes), 'mois_max_aff': str(mois_max_aff),
+        'plafond_preg': str(plafond_preg), 'seuil_baisse': str(seuil_baisse),
+    }
+    for nom_p, val_p in (('afficher_no', afficher_no), ('afficher_desc', afficher_desc),
+                         ('afficher_dev', afficher_dev), ('afficher_compte', afficher_compte),
+                         ('afficher_var', afficher_var), ('afficher_tendance', afficher_tendance),
+                         ('afficher_chaleur', afficher_chaleur), ('afficher_div', afficher_div),
+                         ('afficher_analystes', afficher_analystes), ('afficher_signal', afficher_signal),
+                         ('afficher_score', afficher_score), ('afficher_confiance', afficher_confiance),
+                         ('afficher_risque', afficher_risque), ('afficher_volatilite', afficher_volatilite),
+                         ('activer_taux_change', activer_taux_change), ('afficher_gain_jour', afficher_gain_jour),
+                         ('afficher_bandeau', afficher_bandeau), ('afficher_alertes', afficher_alertes),
+                         ('afficher_rang', afficher_rang), ('afficher_pourquoi', afficher_pourquoi),
+                         ('afficher_percentile', afficher_percentile), ('afficher_concordance', afficher_concordance),
+                         ('afficher_entree', afficher_entree), ('afficher_secteur', afficher_secteur),
+                         ('trier_par_rang', trier_par_rang), ('afficher_baisse', afficher_baisse),
+                         ('afficher_fondamentaux', afficher_fondamentaux), ('journaliser', journaliser)):
+        cfg_courant[nom_p] = "1" if val_p else "0"
+    if cfg_courant != {k: CFG_APP.get(k) for k in cfg_courant}:
+        if sauvegarder_config_app(cfg_courant):
+            st.session_state['config_app'] = dict(cfg_courant)
+            CFG_APP = st.session_state['config_app']
+            st.toast("⚙️ Préférences enregistrées.", icon="💾")
 
 with col_btn:
     if st.button(f"🔄 Rafraîchir ({heure_actuelle})"):
@@ -1158,7 +1317,13 @@ try:
     with st.spinner("Chargement du Portefeuille..."):
         yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True)
 
+    # === v7 : cache YF (secours quand Yahoo bloque .info -> scores stables) ===
+    if 'cache_yf' not in st.session_state:
+        st.session_state['cache_yf'] = charger_cache_yf()
+    cache_yf = st.session_state['cache_yf']
+
     df_live = construire_donnees(df_portefeuille_actif, yahoo_p1, est_portefeuille=True, plafond_scaling=plafond_preg)
+    df_live = appliquer_cache_yf(df_live, cache_yf)
     df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes, mois_max_aff=mois_max_aff, plafond_preg=plafond_preg)
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
@@ -1361,6 +1526,7 @@ try:
     yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
 
     df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes, plafond_scaling=plafond_preg)
+    df_live_prospects = appliquer_cache_yf(df_live_prospects, cache_yf)
     df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes, mois_max_aff=mois_max_aff, plafond_preg=plafond_preg)
     for col in ["Pré G %", "Var %"]:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
@@ -1413,13 +1579,28 @@ try:
     if journaliser:
         sig_journal = signature_donnees(("JOURNAL",) + g1 + g2 + g3)
         if st.session_state.get('sig_journal') != sig_journal:
-            journal_rows, ecrit = journaliser_signaux(df_live, df_live_prospects)
+            # Clôtures des indices pour la courbe « Portefeuille vs marché »
+            indices_cloture = {}
+            for sym_i in ("^GSPTSE", "^GSPC"):
+                h_i = yahoo_p1.get(sym_i, {}).get('hist', pd.DataFrame())
+                if not h_i.empty and 'Close' in h_i.columns:
+                    c_i = h_i['Close'].dropna()
+                    if len(c_i):
+                        indices_cloture[sym_i] = float(c_i.iloc[-1])
+            journal_rows, ecrit = journaliser_signaux(df_live, df_live_prospects,
+                                                      valeur_totale_nette, indices_cloture)
             st.session_state['sig_journal'] = sig_journal
             st.session_state['journal_rows'] = journal_rows
             if ecrit:
                 st.toast("📓 Signaux du jour journalisés.", icon="✅")
         else:
             journal_rows = st.session_state.get('journal_rows', [])
+
+    # === v7 : sauvegarde du cache YF (1 fois par rafraîchissement) ===
+    sig_cache = signature_donnees(("CACHE",) + g1 + g2 + g3)
+    if st.session_state.get('sig_cache_yf') != sig_cache:
+        sauvegarder_cache_yf(df_live, df_live_prospects)
+        st.session_state['sig_cache_yf'] = sig_cache
 
     with tab_dec:
         # --- Top 5 achats par devise (meilleur Rang) ; CAD séparé détenu / non détenu ---
@@ -1532,6 +1713,26 @@ try:
                         c2.metric(f"Meilleur ({meilleur['Symbole']})", f"{meilleur['Perf %']:+.1f} %")
                         c3.metric(f"Pire ({pire['Symbole']})", f"{pire['Perf %']:+.1f} %")
                         st.caption(f"{len(perf)} signaux suivis depuis leur 1re apparition au Journal.")
+            # --- Évolution : valeur du portefeuille vs indices (base 100) ---
+            valeurs_j = jdf[jdf["Type"] == "Valeur"].copy()
+            if not valeurs_j.empty:
+                valeurs_j["Prix"] = pd.to_numeric(valeurs_j["Prix"], errors="coerce")
+                pivot = valeurs_j.pivot_table(index="Date", columns="Symbole",
+                                              values="Prix", aggfunc="last").sort_index()
+                if len(pivot) >= 2:
+                    norm = pivot.div(pivot.iloc[0]) * 100   # base 100 au 1er jour
+                    norm = norm.rename(columns={"PORTEFEUILLE": "Portefeuille",
+                                                "^GSPTSE": "TSX", "^GSPC": "S&P 500"})
+                    st.markdown("#### 📈 Portefeuille vs marché (base 100)")
+                    st.line_chart(norm)
+                    dern = norm.iloc[-1].dropna()
+                    if len(dern):
+                        cparts = st.columns(len(dern))
+                        for i_c, (nom_c, val_c) in enumerate(dern.items()):
+                            cparts[i_c].metric(str(nom_c), f"{val_c - 100:+.1f} %")
+                    st.caption(f"Depuis le {pivot.index[0]} ({len(pivot)} jour(s) enregistré(s)).")
+                else:
+                    st.caption("📈 La courbe Portefeuille vs marché apparaîtra dès le 2e jour de données.")
         elif journaliser:
             st.caption("📓 Le Journal se remplit à chaque jour d'utilisation — les changements et "
                        "la performance des signaux apparaîtront ici dès la 2e séance.")

@@ -188,6 +188,35 @@ def construire_alertes(sh):
         if pot >= SEUIL_OPPORTUNITE:
             alertes[f"opportunite:{sym}"] = (f"[OPPORTUNITÉ] {sym} : +{pot:.0f} % de potentiel, "
                                              f"cibles Yahoo ({cy:.2f} $) et Affaires ({ca:.2f} $) concordantes")
+
+    # --- Top 5 achats (Rang de l'app, via l'onglet CacheYF ecrit par la v7) ---
+    # Frais de la DERNIERE utilisation de l'app ; un titre qui ENTRE dans le Top 5
+    # (CAD ou US, non detenu) declenche une alerte (anti-bruit par l'etat).
+    try:
+        wsc = sh.worksheet("CacheYF")
+        valsc = wsc.get_all_values()
+    except Exception:
+        valsc = []
+    if len(valsc) > 1:
+        entc = {' '.join(str(h).split()): i for i, h in enumerate(valsc[0])}
+        k_s, k_d, k_p, k_r = (entc.get("Symbole"), entc.get("Devise"),
+                              entc.get("Possede"), entc.get("Achat Rang"))
+        if None not in (k_s, k_d, k_r):
+            candidats = []
+            for r in valsc[1:]:
+                if len(r) <= max(k_s, k_d, k_r):
+                    continue
+                rang = nombre(r[k_r])
+                if rang is None:
+                    continue
+                detenu = (k_p is not None and len(r) > k_p and str(r[k_p]).strip() == "1")
+                candidats.append((str(r[k_s]).strip(), str(r[k_d]).strip().upper(), detenu, rang))
+            for devise, etiquette in (("CAD", "CAD"), ("USD", "US")):
+                top5 = sorted([c for c in candidats if c[1] == devise and not c[2]],
+                              key=lambda c: -c[3])[:5]
+                for sym, _, _, rang in top5:
+                    alertes[f"top5:{etiquette}:{sym}"] = \
+                        f"[TOP 5 {etiquette}] {sym} est dans le Top 5 achats (rang {rang:.0f})"
     return alertes
 
 
