@@ -69,6 +69,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def est_mobile():
+    # === v7 : détection téléphone via le User-Agent du navigateur (st.context,
+    # Streamlit >= 1.37). Les navigateurs mobiles annoncent "Mobi" / "Android" /
+    # "iPhone". En cas de doute (vieille version, en-tête absent) -> ordinateur.
+    try:
+        ua = str(st.context.headers.get("User-Agent", "")).lower()
+    except Exception:
+        return False
+    return any(m in ua for m in ("mobi", "android", "iphone", "ipod"))
+
 @st.cache_data(ttl=300)
 def heure_mise_a_jour():
     return datetime.now(ZoneInfo("America/Toronto")).strftime("%H:%M")
@@ -268,6 +278,19 @@ col_param, col_btn = st.columns(2)
 with col_param:
     with st.popover("⚙️ Paramètres"):
         source_gain = st.selectbox("Calcul du Gain", ["Yahoo", "Affaires", "Moyenne"], index=2)
+
+        # === v7 : mode d'affichage — sur téléphone, colonnes ESSENTIELLES seulement ===
+        mode_affichage = st.selectbox(
+            "Mode d'affichage",
+            ["Auto (détection)", "Ordinateur (complet)", "Mobile (essentiel)"],
+            index=0
+        )
+        if mode_affichage == "Mobile (essentiel)":
+            mode_mobile = True
+        elif mode_affichage == "Ordinateur (complet)":
+            mode_mobile = False
+        else:
+            mode_mobile = est_mobile()
 
         st.markdown("---")
         st.markdown("**Affichage des Colonnes**")
@@ -1104,6 +1127,15 @@ try:
     if afficher_analystes: colonnes_base_pros.append("Nb Analystes")  # === V4 ===
     colonnes_base_pros.extend(["Pré YF Display", "MAJ YF", "Pré Aff Display", "MAJ Aff"])
     if afficher_pourquoi: colonnes_base_pros.append("Pourquoi")        # === v7 ===
+
+    # === v7 : MODE MOBILE — on ne garde que les colonnes ESSENTIELLES (l'ordre des
+    # listes est préservé). Sur ordinateur, tous les détails restent affichés.
+    if mode_mobile:
+        ESSENTIEL_PORT = {"Symbole", "Prix $", "Gain %", "Signal", "Pré G %"}
+        ESSENTIEL_PROS = {"Symbole", "Signal", "Achat Rang", "Prix $", "Pré G %", "Pré Aff Display"}
+        colonnes_base_port = [c for c in colonnes_base_port if c in ESSENTIEL_PORT]
+        colonnes_base_pros = [c for c in colonnes_base_pros if c in ESSENTIEL_PROS]
+        st.caption("📱 Mode mobile : colonnes essentielles (changer dans ⚙️ Paramètres → Mode d'affichage).")
 
     tab1, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
 
