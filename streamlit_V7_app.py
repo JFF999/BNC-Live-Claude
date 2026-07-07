@@ -421,7 +421,7 @@ with col_param:
         afficher_entree = st.checkbox("Afficher Qualité d'entrée", value=False)
         afficher_secteur = st.checkbox("Afficher Secteur", value=False)
         trier_par_rang = st.checkbox("Trier les Prospects par Rang d'achat", value=True)
-        afficher_baisse = st.checkbox("Afficher Baisse depuis sommet 52s (Portefeuille)", value=True)
+        afficher_baisse = st.checkbox("Afficher Baisse depuis sommet 52s (Portefeuille)", value=False)
         seuil_baisse = st.number_input(
             "Alerte si baisse depuis le sommet dépasse (%)",
             min_value=5, max_value=50, value=15, step=5
@@ -1093,10 +1093,13 @@ def config_colonnes_communes():
         "MAJ YF": st.column_config.TextColumn("Date YF", width="small"),
         "MAJ Aff": st.column_config.TextColumn("Date Aff", width="small"),
     }
-    # === v7 : sur MOBILE, le Rang en simple chiffre (la barre de progression est
-    # trop large pour un petit écran). Sur ordinateur, barre inchangée.
+    # === v7 : sur MOBILE, le Rang en simple chiffre très étroit (la barre de
+    # progression est trop large pour un petit écran). Sur ordinateur, barre inchangée.
     if globals().get('mode_mobile'):
-        cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
+        try:
+            cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width=45)
+        except Exception:
+            cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
     return cfg
 
 try:
