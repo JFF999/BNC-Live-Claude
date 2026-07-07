@@ -1414,16 +1414,29 @@ try:
             journal_rows = st.session_state.get('journal_rows', [])
 
     with tab_dec:
-        # --- Top 5 achats par devise (meilleur Rang) ---
+        # --- Top 5 achats par devise (meilleur Rang) ; CAD séparé détenu / non détenu ---
         if not df_live_prospects.empty and "Achat Rang" in df_live_prospects.columns:
             cols_top = [c for c in ["Symbole", "Description", "Achat Rang", "Signal", "Prix $",
                                     "Pré G %", "Pourquoi"] if c in df_live_prospects.columns]
-            for titre_top, devise_top in (("🏆 Top 5 achats CAD 🇨🇦", "CAD"), ("🏆 Top 5 achats US 🇺🇸", "USD")):
+            possede = df_live_prospects.get("Possede")
+            if possede is None:
+                possede = pd.Series(False, index=df_live_prospects.index)
+            possede = possede.fillna(False).astype(bool)
+
+            sections = (
+                ("🏆 Top 5 achats CAD 🇨🇦 — non détenus", "CAD", False),
+                ("💼 Top 5 CAD 🇨🇦 — déjà détenus (renforcer ?)", "CAD", True),
+                ("🏆 Top 5 achats US 🇺🇸", "USD", None),
+            )
+            for titre_top, devise_top, filtre_possede in sections:
                 st.markdown(f"#### {titre_top}")
-                top5 = (df_live_prospects[df_live_prospects["Devise"] == devise_top]
+                sel = df_live_prospects["Devise"] == devise_top
+                if filtre_possede is not None:
+                    sel = sel & (possede == filtre_possede)
+                top5 = (df_live_prospects[sel]
                         .sort_values("Achat Rang", ascending=False, na_position="last").head(5))
                 if top5.empty:
-                    st.info("Aucun prospect dans cette devise.")
+                    st.info("Aucun titre dans cette catégorie.")
                     continue
                 st.dataframe(
                     top5[cols_top].style.apply(surligner_prospects, axis=1),
