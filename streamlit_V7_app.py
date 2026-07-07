@@ -282,6 +282,58 @@ def preparer_export_csv(df):
         df_export = df_export.drop(columns=['Tendance'])
     return df_export.to_csv(index=False, sep=';').encode('utf-8-sig')
 
+# === v7 : JOURNAL DES SIGNAUX ====================================================
+# Archive une fois par jour, dans l'onglet « Journal » du Sheet, les signaux du moment :
+#   - Achat : prospects en « Priorité » (avec prix, rang, potentiel)
+#   - Vente : titres du portefeuille en « Vendre »
+# Sert à (1) montrer les CHANGEMENTS vs la dernière séance dans l'onglet Décision et
+# (2) mesurer a posteriori la performance des signaux (les Priorité ont-ils monté ?).
+# =================================================================================
+ENTETE_JOURNAL = ["Date", "Type", "Symbole", "Signal", "Prix", "Rang", "Pré G %"]
+
+def _num(v, defaut=None):
+    n = pd.to_numeric(pd.Series([v]), errors='coerce').iloc[0]
+    return defaut if pd.isna(n) else float(n)
+
+def journaliser_signaux(df_port, df_pros):
+    """Ajoute les signaux du jour à l'onglet Journal (créé au besoin, 1 fois/jour).
+    Renvoie (journal_complet: list[list], ecrit_aujourdhui: bool)."""
+    try:
+        sh = connecter_google_sheets()
+        try:
+            ws = sh.worksheet("Journal")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet("Journal", rows=4000, cols=len(ENTETE_JOURNAL))
+            ws.append_row(ENTETE_JOURNAL)
+        vals = ws.get_all_values()
+        aujourdhui = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
+        if any(r and r[0] == aujourdhui for r in vals[1:]):
+            return vals, False   # déjà journalisé aujourd'hui
+
+        lignes = []
+        if df_pros is not None and not df_pros.empty:
+            for _, r in df_pros.iterrows():
+                if r.get("Signal") == "Priorité":
+                    prix = _num(r.get("Prix $"))
+                    if prix is None:
+                        continue
+                    lignes.append([aujourdhui, "Achat", str(r.get("Symbole Brut") or ""), "Priorité",
+                                   round(prix, 2), round(_num(r.get("Achat Rang"), 0), 1),
+                                   round(_num(r.get("Pré G %"), 0), 1)])
+        if df_port is not None and not df_port.empty:
+            for _, r in df_port.iterrows():
+                if r.get("Signal") == "Vendre":
+                    prix = _num(r.get("Prix $"))
+                    if prix is None:
+                        continue
+                    lignes.append([aujourdhui, "Vente", str(r.get("Symbole Brut") or ""), "Vendre",
+                                   round(prix, 2), "", round(_num(r.get("Pré G %"), 0), 1)])
+        if lignes:
+            ws.append_rows(lignes, value_input_option="USER_ENTERED")
+        return vals + lignes, bool(lignes)
+    except Exception:
+        return [], False
+
 # --- TITRE PRINCIPAL ---
 st.title("📈 BNC LIVE v7")
 
@@ -369,6 +421,13 @@ with col_param:
         afficher_entree = st.checkbox("Afficher Qualité d'entrée", value=False)
         afficher_secteur = st.checkbox("Afficher Secteur", value=False)
         trier_par_rang = st.checkbox("Trier les Prospects par Rang d'achat", value=True)
+        afficher_baisse = st.checkbox("Afficher Baisse depuis sommet 52s (Portefeuille)", value=True)
+        seuil_baisse = st.number_input(
+            "Alerte si baisse depuis le sommet dépasse (%)",
+            min_value=5, max_value=50, value=15, step=5
+        )
+        afficher_fondamentaux = st.checkbox("Afficher Fondamentaux (P/E, croiss., marge)", value=False)
+        journaliser = st.checkbox("Journaliser les signaux (onglet Journal du Sheet)", value=True)
 
 with col_btn:
     if st.button(f"🔄 Rafraîchir ({heure_actuelle})"):
@@ -492,6 +551,10 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
     df['Gain Jour $'] = 0.0
     df['Symbole Brut'] = ""
     df['Secteur'] = ""      # === v7 : secteur Yahoo (diversification) ===
+    df['Baisse 52s %'] = np.nan   # === v7 : % depuis le sommet 52 sem (protection des gains) ===
+    df['P/E'] = np.nan            # === v7 : fondamentaux légers ===
+    df['Croiss Rev %'] = np.nan
+    df['Marge %'] = np.nan
     tendances = []
 
     for index, row in df.iterrows():
@@ -626,6 +689,30 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                     df.at[index, 'Chaleur 52s'] = max(0, min(100, chaleur))
                 else:
                     df.at[index, 'Chaleur 52s'] = 50.0
+
+            # === v7 : baisse depuis le sommet 52 sem (négatif = sous le sommet) ===
+            if high_52 is not None and prix_actuel is not None and float(high_52) > 0:
+                df.at[index, 'Baisse 52s %'] = (float(prix_actuel) - float(high_52)) / float(high_52) * 100
+
+            # === v7 : fondamentaux légers (déjà présents dans le .info téléchargé) ===
+            pe = infos_gen.get('trailingPE') or infos_gen.get('forwardPE')
+            try:
+                if pe is not None and float(pe) > 0:
+                    df.at[index, 'P/E'] = float(pe)
+            except (ValueError, TypeError):
+                pass
+            rg = infos_gen.get('revenueGrowth')       # fraction (0.15 = +15 %)
+            try:
+                if rg is not None:
+                    df.at[index, 'Croiss Rev %'] = float(rg) * 100
+            except (ValueError, TypeError):
+                pass
+            pm = infos_gen.get('profitMargins')       # fraction
+            try:
+                if pm is not None:
+                    df.at[index, 'Marge %'] = float(pm) * 100
+            except (ValueError, TypeError):
+                pass
 
             devise_off = infos_gen.get('currency')
             if devise_off:
@@ -905,6 +992,15 @@ def couleur_var(valeur):
     elif valeur < 0: return 'color: #ff4d4d;'
     return ''
 
+def couleur_baisse_fabrique(seuil):
+    # === v7 : rouge quand le titre a reculé de plus de `seuil` % depuis son sommet 52s ===
+    def couleur_baisse(valeur):
+        if pd.isna(valeur): return ''
+        if valeur <= -abs(seuil): return 'background-color: rgba(217, 75, 75, .28);'
+        if valeur <= -abs(seuil) / 2: return 'background-color: rgba(255, 209, 102, .25);'
+        return ''
+    return couleur_baisse
+
 def couleur_alerte_vente(valeur):
     if pd.isna(valeur): return ''
     if valeur <= 5: return 'background-color: rgba(255, 0, 0, 0.3)'
@@ -983,6 +1079,10 @@ def config_colonnes_communes():
         "Confiance": st.column_config.ProgressColumn("Conf.", format="%.0f", min_value=0, max_value=100),
         "Risque": st.column_config.ProgressColumn("Risque", format="%.0f", min_value=0, max_value=100),
         "Achat Rang": st.column_config.ProgressColumn("🏆 Rang", format="%.0f", min_value=0, max_value=100),
+        "Baisse 52s %": st.column_config.NumberColumn("↘ Sommet", format="%.1f %%"),
+        "P/E": st.column_config.NumberColumn("P/E", format="%.1f"),
+        "Croiss Rev %": st.column_config.NumberColumn("Cr. Rev", format="%.1f %%"),
+        "Marge %": st.column_config.NumberColumn("Marge", format="%.1f %%"),
         "Rang %": st.column_config.NumberColumn("Rang %", format="%.0f %%"),
         "Concordance": st.column_config.ProgressColumn("Concord.", format="%.0f", min_value=0, max_value=100),
         "Entrée": st.column_config.ProgressColumn("Entrée", format="%.0f", min_value=0, max_value=100),
@@ -1109,11 +1209,13 @@ try:
     if afficher_signal: colonnes_base_port.append("Signal")
 
     if afficher_var: colonnes_base_port.append("Var %")
+    if afficher_baisse: colonnes_base_port.append("Baisse 52s %")     # === v7 ===
     if afficher_tendance: colonnes_base_port.append("Tendance")
     if afficher_chaleur: colonnes_base_port.append("Chaleur 52s")
     if afficher_div: colonnes_base_port.append("Div %")
     if afficher_volatilite: colonnes_base_port.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_port.append("Nb Analystes")  # === V4 ===
+    if afficher_fondamentaux: colonnes_base_port.extend(["P/E", "Croiss Rev %", "Marge %"])  # === v7 ===
 
     colonnes_base_port.extend(["Pré YF Display", "Pré Aff Display", "Pré G %", "Achat $", "Qtée", "Date Achat", "MAJ YF", "MAJ Aff"])
 
@@ -1141,6 +1243,7 @@ try:
     if afficher_div: colonnes_base_pros.append("Div %")
     if afficher_volatilite: colonnes_base_pros.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_pros.append("Nb Analystes")  # === V4 ===
+    if afficher_fondamentaux: colonnes_base_pros.extend(["P/E", "Croiss Rev %", "Marge %"])  # === v7 ===
     colonnes_base_pros.extend(["Pré YF Display", "MAJ YF", "Pré Aff Display", "MAJ Aff"])
     if afficher_pourquoi: colonnes_base_pros.append("Pourquoi")        # === v7 ===
 
@@ -1153,7 +1256,7 @@ try:
         colonnes_base_pros = [c for c in colonnes_base_pros if c in ESSENTIEL_PROS]
         st.caption("📱 Mode mobile : colonnes essentielles (changer dans ⚙️ Paramètres → Mode d'affichage).")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
+    tab1, tab_dec, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🧭 Décision", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
 
     # --- ONGLET 1 : PORTEFEUILLE ---
     with tab1:
@@ -1230,6 +1333,8 @@ try:
             styled_port = styled_port.map(couleur_alerte_vente, subset=['Pré G %'])
         if afficher_var and 'Var %' in df_live.columns:
             styled_port = styled_port.map(couleur_var, subset=['Var %'])
+        if afficher_baisse and 'Baisse 52s %' in df_live.columns:
+            styled_port = styled_port.map(couleur_baisse_fabrique(seuil_baisse), subset=['Baisse 52s %'])
         if 'Signal' in df_live.columns:
             styled_port = styled_port.map(couleur_signal_portefeuille, subset=['Signal'])
         if 'Pré Aff Périmé' in df_live.columns:
@@ -1294,6 +1399,103 @@ try:
                 html_alertes = "<div class='alert-box'><strong>🚨 Alertes Actives :</strong><br>"
                 for alerte in alertes_generees: html_alertes += f"<p class='alert-item'>{alerte}</p>"
                 st.markdown(html_alertes + "</div>", unsafe_allow_html=True)
+
+    # === v7 : JOURNAL (1 fois/jour) puis ONGLET DÉCISION =========================
+    journal_rows = []
+    if journaliser:
+        sig_journal = signature_donnees(("JOURNAL",) + g1 + g2 + g3)
+        if st.session_state.get('sig_journal') != sig_journal:
+            journal_rows, ecrit = journaliser_signaux(df_live, df_live_prospects)
+            st.session_state['sig_journal'] = sig_journal
+            st.session_state['journal_rows'] = journal_rows
+            if ecrit:
+                st.toast("📓 Signaux du jour journalisés.", icon="✅")
+        else:
+            journal_rows = st.session_state.get('journal_rows', [])
+
+    with tab_dec:
+        # --- Top 5 achats (meilleur Rang) ---
+        st.markdown("#### 🏆 Top 5 achats aujourd'hui")
+        if not df_live_prospects.empty and "Achat Rang" in df_live_prospects.columns:
+            top5 = df_live_prospects.sort_values("Achat Rang", ascending=False, na_position="last").head(5)
+            cols_top = [c for c in ["Symbole", "Description", "Achat Rang", "Signal", "Prix $",
+                                    "Pré G %", "Pourquoi"] if c in top5.columns]
+            st.dataframe(
+                top5[cols_top].style.apply(surligner_prospects, axis=1),
+                use_container_width=False, hide_index=True,
+                column_config=config_colonnes_communes()
+            )
+            st.caption("🟡 surligné = déjà détenu. Détails et filtres dans les onglets Pros.")
+        else:
+            st.info("Prospects non disponibles.")
+
+        # --- Titres à VENDRE (portefeuille) ---
+        st.markdown("#### 🔴 À vendre / objectif atteint")
+        ventes = df_live[df_live.get("Signal", pd.Series(dtype=object)) == "Vendre"] if not df_live.empty else pd.DataFrame()
+        if not ventes.empty:
+            cols_v = [c for c in ["Symbole", "Description", "Prix $", "Gain %", "Pré G %", "Baisse 52s %"] if c in ventes.columns]
+            st.dataframe(ventes[cols_v], use_container_width=False, hide_index=True,
+                         column_config=config_colonnes_communes())
+        else:
+            st.success("Aucun titre du portefeuille en signal Vendre. ✅")
+
+        # --- Protection des gains : fortes baisses depuis le sommet 52 sem ---
+        if 'Baisse 52s %' in df_live.columns and not df_live.empty:
+            baisses = df_live[pd.to_numeric(df_live['Baisse 52s %'], errors='coerce') <= -abs(seuil_baisse)]
+            if not baisses.empty:
+                st.markdown(f"#### ↘ Repli de plus de {seuil_baisse} % depuis le sommet 52 sem")
+                cols_b = [c for c in ["Symbole", "Description", "Prix $", "Gain %", "Baisse 52s %", "Signal"] if c in baisses.columns]
+                st.dataframe(
+                    baisses.sort_values('Baisse 52s %')[cols_b],
+                    use_container_width=False, hide_index=True,
+                    column_config=config_colonnes_communes()
+                )
+
+        # --- Changements vs dernière séance + performance des signaux (via Journal) ---
+        if journal_rows and len(journal_rows) > 1:
+            jdf = pd.DataFrame(journal_rows[1:], columns=journal_rows[0])
+            jdf["Prix"] = pd.to_numeric(jdf.get("Prix"), errors="coerce")
+            dates = sorted(jdf["Date"].dropna().unique())
+            aujourdhui = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
+
+            # Changements : Priorité d'aujourd'hui vs dernière date PRÉCÉDENTE
+            dates_prec = [d for d in dates if d < aujourdhui]
+            if dates_prec:
+                prec = dates_prec[-1]
+                set_avant = set(jdf[(jdf["Date"] == prec) & (jdf["Type"] == "Achat")]["Symbole"])
+                set_now = set(jdf[(jdf["Date"] == aujourdhui) & (jdf["Type"] == "Achat")]["Symbole"])
+                nouveaux = sorted(set_now - set_avant)
+                sortis = sorted(set_avant - set_now)
+                if nouveaux or sortis:
+                    st.markdown(f"#### 🔄 Changements depuis le {prec}")
+                    if nouveaux:
+                        st.markdown("**Nouvelles Priorités :** " + ", ".join(f"`{s}`" for s in nouveaux))
+                    if sortis:
+                        st.markdown("**Sorties de Priorité :** " + ", ".join(f"`{s}`" for s in sortis))
+
+            # Performance des signaux Achat passés (1re apparition -> prix actuel)
+            achats = jdf[jdf["Type"] == "Achat"].dropna(subset=["Prix"])
+            if not achats.empty and not df_live_prospects.empty:
+                premiers = achats.sort_values("Date").groupby("Symbole").first().reset_index()
+                premiers = premiers[premiers["Date"] < aujourdhui]   # au moins 1 jour de recul
+                if not premiers.empty:
+                    prix_actuels = df_live_prospects.set_index("Symbole Brut")["Prix $"]
+                    prix_actuels = pd.to_numeric(prix_actuels, errors="coerce")
+                    premiers["Prix actuel"] = premiers["Symbole"].map(prix_actuels)
+                    premiers["Perf %"] = (premiers["Prix actuel"] - premiers["Prix"]) / premiers["Prix"] * 100
+                    perf = premiers.dropna(subset=["Perf %"])
+                    if not perf.empty:
+                        st.markdown("#### 📓 Performance des signaux « Priorité » passés")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Moyenne", f"{perf['Perf %'].mean():+.1f} %")
+                        meilleur = perf.loc[perf['Perf %'].idxmax()]
+                        pire = perf.loc[perf['Perf %'].idxmin()]
+                        c2.metric(f"Meilleur ({meilleur['Symbole']})", f"{meilleur['Perf %']:+.1f} %")
+                        c3.metric(f"Pire ({pire['Symbole']})", f"{pire['Perf %']:+.1f} %")
+                        st.caption(f"{len(perf)} signaux suivis depuis leur 1re apparition au Journal.")
+        elif journaliser:
+            st.caption("📓 Le Journal se remplit à chaque jour d'utilisation — les changements et "
+                       "la performance des signaux apparaîtront ici dès la 2e séance.")
 
     # --- ONGLET 2 : PROSPECTS CAD ---
     with tab2:
@@ -1477,6 +1679,25 @@ try:
             - **Pourquoi** — résumé lisible des facteurs saillants d'un titre (ex.
               « +28 % potentiel · 2 sources concordantes · proche creux 52s »).
             - **Rang %** — percentile du titre dans la liste affichée (option).
+
+            ### 🧭 Onglet Décision
+            La synthèse du jour en un coup d'œil : **Top 5 achats** (meilleur Rang), titres à
+            **vendre**, replis de plus de N % depuis le **sommet 52 sem** (protection des gains),
+            **changements** depuis la dernière séance et **performance des signaux passés**.
+
+            ### 📓 Journal des signaux
+            Chaque jour d'utilisation, les prospects en « Priorité » et les titres en « Vendre »
+            sont archivés (avec prix) dans l'onglet **Journal** du Google Sheet. Avec le temps,
+            la section Décision montre si les signaux « Priorité » ont réellement monté.
+
+            ### ↘ Baisse depuis le sommet 52 sem (Portefeuille)
+            Un titre encore gagnant peut avoir reculé fortement depuis son sommet : la colonne
+            « ↘ Sommet » (rouge au-delà du seuil, Paramètres, défaut 15 %) aide à **protéger les
+            gains** — l'angle mort du signal Vendre basé sur le potentiel seul.
+
+            ### 📊 Fondamentaux légers (option)
+            **P/E**, **croissance des revenus** et **marge nette** (Yahoo), en colonnes optionnelles
+            — informatif, non intégré au Score.
 
             *Tous ces indicateurs s'activent/se masquent dans ⚙️ Paramètres → Aide à la décision.*
 
