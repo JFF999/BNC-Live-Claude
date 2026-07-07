@@ -438,7 +438,7 @@ def _meme_societe(nom_cad, nom_us):
         return False
     return a == b or a in b or b in a
 
-def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeuille=None):
+def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeuille=None, plafond_scaling=200):
     df = df.copy()
     if 'Description' not in df.columns:   # === Description : garantit que la colonne existe ===
         df['Description'] = ""
@@ -509,9 +509,6 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 # équivalent (souvent déjà dans les Prospects, donc déjà téléchargé), mis à
                 # l'échelle CAD par règle de trois sur les prix actuels :
                 #   Pré YF_CAD = Objectif_US × (Prix_CAD / Prix_US)
-                # La MÊME échelle s'applique à la Pré Aff (Les Affaires) : la cible empruntée
-                # au ticker US est en $US et doit être ramenée au prix du titre .TO (ex. CDR
-                # comme NVDA.TO), sinon le Pré G % est absurde (300 $US vs prix CDR ~42 $CAD).
                 us_candidat = symbole_clean
                 for suff in ('.TO', '.V', '.NE', '.CN'):
                     if us_candidat.endswith(suff):
@@ -524,18 +521,43 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 # Garde-fou anti-collision : même société (nom Yahoo) côté CAD et US
                 nom_cad = infos_gen.get('longName') or infos_gen.get('shortName')
                 nom_us = info_us.get('longName') or info_us.get('shortName')
-                if (not hist_us.empty and 'Close' in hist_us.columns
+                if (cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns
                         and _meme_societe(nom_cad, nom_us)):
                     close_us = hist_us['Close'].dropna()
                     if len(close_us) >= 1 and float(close_us.iloc[-1]) > 0:
                         prix_us = float(close_us.iloc[-1])
-                        ratio_cad = float(prix_actuel) / prix_us
-                        if cible_us is not None:
-                            df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * ratio_cad
-                        # Pré Aff (Les Affaires) empruntée au ticker US -> même mise à l'échelle CAD
-                        aff_num = pd.to_numeric(pd.Series([row.get('Pré Aff')]), errors='coerce').iloc[0]
-                        if pd.notna(aff_num) and aff_num > 0:
-                            df.at[index, 'Pré Aff'] = float(aff_num) * ratio_cad
+                        df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * (float(prix_actuel) / prix_us)
+
+            # === v7 : Pré Aff en $US ? Mise à l'échelle CAD INDÉPENDANTE de la branche Pré YF.
+            # La synchro Affaires apparie par symbole de base (NVDA -> NVDA.TO) : la cible du
+            # Sheet peut être en $US même quand Yahoo fournit une cible native pour le .TO.
+            # Règle de PLAUSIBILITÉ (évite de convertir une cible déjà en CAD, ex. MDA.TO) :
+            # on ne convertit QUE si la valeur brute implique un gain invraisemblable
+            # (> plafond_scaling %) ET que la valeur convertie redevient plausible.
+            if symbole_clean.endswith(('.TO', '.V', '.NE', '.CN')) and prix_actuel is not None and prix_actuel > 0:
+                aff_num = pd.to_numeric(pd.Series([row.get('Pré Aff')]), errors='coerce').iloc[0]
+                seuil = float(plafond_scaling) if plafond_scaling and plafond_scaling > 0 else 200.0
+                if pd.notna(aff_num) and aff_num > 0:
+                    gain_brut_pct = (float(aff_num) - float(prix_actuel)) / float(prix_actuel) * 100
+                    if gain_brut_pct > seuil:
+                        us_candidat2 = symbole_clean
+                        for suff in ('.TO', '.V', '.NE', '.CN'):
+                            if us_candidat2.endswith(suff):
+                                us_candidat2 = us_candidat2[:-len(suff)]
+                                break
+                        donnees_us2 = dict_yahoo.get(us_candidat2, {})
+                        info_us2 = donnees_us2.get('info', {})
+                        hist_us2 = donnees_us2.get('hist', pd.DataFrame())
+                        nom_cad2 = infos_gen.get('longName') or infos_gen.get('shortName')
+                        nom_us2 = info_us2.get('longName') or info_us2.get('shortName')
+                        if (not hist_us2.empty and 'Close' in hist_us2.columns
+                                and _meme_societe(nom_cad2, nom_us2)):
+                            close_us2 = hist_us2['Close'].dropna()
+                            if len(close_us2) >= 1 and float(close_us2.iloc[-1]) > 0:
+                                aff_cad = float(aff_num) * (float(prix_actuel) / float(close_us2.iloc[-1]))
+                                gain_cad_pct = (aff_cad - float(prix_actuel)) / float(prix_actuel) * 100
+                                if gain_cad_pct <= seuil:
+                                    df.at[index, 'Pré Aff'] = aff_cad
 
             # === V4 : nombre d'analystes derrière l'objectif (fiabilité du signal) ===
             nb_analystes = infos_gen.get('numberOfAnalystOpinions')
@@ -989,7 +1011,7 @@ try:
     with st.spinner("Chargement du Portefeuille..."):
         yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True)
 
-    df_live = construire_donnees(df_portefeuille_actif, yahoo_p1, est_portefeuille=True)
+    df_live = construire_donnees(df_portefeuille_actif, yahoo_p1, est_portefeuille=True, plafond_scaling=plafond_preg)
     df_live = calculer_potentiel_gain(df_live, source_gain, est_portefeuille=True, min_analystes=min_analystes, mois_max_aff=mois_max_aff, plafond_preg=plafond_preg)
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
@@ -1177,7 +1199,7 @@ try:
         yahoo_p23 = telecharger_yahoo((g2, g3))
     yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
 
-    df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes)
+    df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes, plafond_scaling=plafond_preg)
     df_live_prospects = calculer_potentiel_gain(df_live_prospects, source_gain, est_portefeuille=False, min_analystes=min_analystes, mois_max_aff=mois_max_aff, plafond_preg=plafond_preg)
     for col in ["Pré G %", "Var %"]:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
@@ -1232,11 +1254,11 @@ try:
         max_risque_cad = col_max.number_input("Risque max", min_value=0, max_value=100, value=85, step=5, key="cad_max_risk")
         filtre_signal_cad = col_sig.multiselect(
             "Signaux", SIGNAUX,
-            default=["Priorité", "À surveiller", "À valider"], key="cad_signal_filter"
+            default=["Priorité"], key="cad_signal_filter"
         )
         voir_aff_cad = st.checkbox(
             "Ajouter tous les titres ayant une prévision Les Affaires (en plus du filtre)",
-            key="cad_voir_aff"
+            value=True, key="cad_voir_aff"
         )
 
         df_prospects_cad = df_live_prospects[df_live_prospects['Devise'] == 'CAD'].copy()
@@ -1286,11 +1308,11 @@ try:
         max_risque_us = col_max_us.number_input("Risque max", min_value=0, max_value=100, value=85, step=5, key="usd_max_risk")
         filtre_signal_us = col_sig_us.multiselect(
             "Signaux", SIGNAUX,
-            default=["Priorité", "À surveiller", "À valider"], key="usd_signal_filter"
+            default=["Priorité"], key="usd_signal_filter"
         )
         voir_aff_us = st.checkbox(
             "Ajouter tous les titres ayant une prévision Les Affaires (en plus du filtre)",
-            key="usd_voir_aff"
+            value=True, key="usd_voir_aff"
         )
 
         df_prospects_usd = df_live_prospects[df_live_prospects['Devise'] == 'USD'].copy()
