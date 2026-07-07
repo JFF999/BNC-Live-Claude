@@ -474,8 +474,13 @@ taux_usdcad = obtenir_taux_change()
 # --- HAUT DE PAGE : Paramètres ---
 col_param, col_btn = st.columns(2)
 
+# Libellés compacts sur mobile (mode connu AVANT le popover grâce à la préférence
+# persistée ; « Auto » retombe sur la détection User-Agent).
+_mode_pref = CFG_APP.get('mode_affichage', 'Auto (détection)')
+mobile_ui = est_mobile() if _mode_pref == 'Auto (détection)' else (_mode_pref == 'Mobile (essentiel)')
+
 with col_param:
-    with st.popover("⚙️ Paramètres"):
+    with st.popover("⚙️" if mobile_ui else "⚙️ Paramètres"):
         OPTIONS_GAIN = ["Yahoo", "Affaires", "Moyenne"]
         source_gain = st.selectbox("Calcul du Gain", OPTIONS_GAIN,
                                    index=pref_index('source_gain', OPTIONS_GAIN, 2))
@@ -638,7 +643,7 @@ with col_btn:
         st.rerun()
     url_sheet = url_google_sheet()
     if url_sheet:
-        c_sheet.link_button("📗 Ouvrir Sheet", url_sheet)
+        c_sheet.link_button("📗 Sheet" if mobile_ui else "📗 Ouvrir Sheet", url_sheet)
 
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
