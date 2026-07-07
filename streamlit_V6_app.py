@@ -489,6 +489,9 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 # équivalent (souvent déjà dans les Prospects, donc déjà téléchargé), mis à
                 # l'échelle CAD par règle de trois sur les prix actuels :
                 #   Pré YF_CAD = Objectif_US × (Prix_CAD / Prix_US)
+                # La MÊME échelle s'applique à la Pré Aff (Les Affaires) : la cible empruntée
+                # au ticker US est en $US et doit être ramenée au prix du titre .TO (ex. CDR
+                # comme NVDA.TO), sinon le Pré G % est absurde (300 $US vs prix CDR ~42 $CAD).
                 us_candidat = symbole_clean
                 for suff in ('.TO', '.V', '.NE', '.CN'):
                     if us_candidat.endswith(suff):
@@ -501,12 +504,18 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 # Garde-fou anti-collision : même société (nom Yahoo) côté CAD et US
                 nom_cad = infos_gen.get('longName') or infos_gen.get('shortName')
                 nom_us = info_us.get('longName') or info_us.get('shortName')
-                if (cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns
+                if (not hist_us.empty and 'Close' in hist_us.columns
                         and _meme_societe(nom_cad, nom_us)):
                     close_us = hist_us['Close'].dropna()
                     if len(close_us) >= 1 and float(close_us.iloc[-1]) > 0:
                         prix_us = float(close_us.iloc[-1])
-                        df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * (float(prix_actuel) / prix_us)
+                        ratio_cad = float(prix_actuel) / prix_us
+                        if cible_us is not None:
+                            df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * ratio_cad
+                        # Pré Aff (Les Affaires) empruntée au ticker US -> même mise à l'échelle CAD
+                        aff_num = pd.to_numeric(pd.Series([row.get('Pré Aff')]), errors='coerce').iloc[0]
+                        if pd.notna(aff_num) and aff_num > 0:
+                            df.at[index, 'Pré Aff'] = float(aff_num) * ratio_cad
 
             # === V4 : nombre d'analystes derrière l'objectif (fiabilité du signal) ===
             nb_analystes = infos_gen.get('numberOfAnalystOpinions')
