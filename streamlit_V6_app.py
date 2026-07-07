@@ -1100,22 +1100,22 @@ try:
             default=["Priorité", "À surveiller", "À valider"], key="cad_signal_filter"
         )
         voir_aff_cad = st.checkbox(
-            "Voir tous les titres ayant une prévision Les Affaires (ignore Score / Risque / Signaux)",
+            "Ajouter tous les titres ayant une prévision Les Affaires (en plus du filtre)",
             key="cad_voir_aff"
         )
 
         df_prospects_cad = df_live_prospects[df_live_prospects['Devise'] == 'CAD'].copy()
-        if voir_aff_cad:
-            aff_cad = pd.to_numeric(df_prospects_cad.get("Pré Aff Display"), errors="coerce")
-            df_prospects_cad = df_prospects_cad[aff_cad.notna() & (aff_cad != 0)].sort_values(
-                by="Pré G %", ascending=False, na_position="last"
-            )
-        elif "Score" in df_prospects_cad.columns:
-            df_prospects_cad = df_prospects_cad[
+        if "Score" in df_prospects_cad.columns:
+            masque_cad = (
                 df_prospects_cad["Score"].fillna(0).ge(min_score_cad)
                 & df_prospects_cad["Risque"].fillna(100).le(max_risque_cad)
                 & df_prospects_cad["Signal"].isin(filtre_signal_cad)
-            ].sort_values(by=["Score", "Confiance"], ascending=[False, False], na_position="last")
+            )
+            if voir_aff_cad:
+                aff_cad = pd.to_numeric(df_prospects_cad.get("Pré Aff Display"), errors="coerce")
+                masque_cad = masque_cad | (aff_cad.notna() & (aff_cad != 0))
+            df_prospects_cad = df_prospects_cad[masque_cad].sort_values(
+                by=["Score", "Confiance"], ascending=[False, False], na_position="last")
 
         colonnes_a_afficher_pros = [c for c in colonnes_base_pros if c in df_prospects_cad.columns]
         config_description = config_largeur_description(df_prospects_cad, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
@@ -1145,22 +1145,22 @@ try:
             default=["Priorité", "À surveiller", "À valider"], key="usd_signal_filter"
         )
         voir_aff_us = st.checkbox(
-            "Voir tous les titres ayant une prévision Les Affaires (ignore Score / Risque / Signaux)",
+            "Ajouter tous les titres ayant une prévision Les Affaires (en plus du filtre)",
             key="usd_voir_aff"
         )
 
         df_prospects_usd = df_live_prospects[df_live_prospects['Devise'] == 'USD'].copy()
-        if voir_aff_us:
-            aff_us = pd.to_numeric(df_prospects_usd.get("Pré Aff Display"), errors="coerce")
-            df_prospects_usd = df_prospects_usd[aff_us.notna() & (aff_us != 0)].sort_values(
-                by="Pré G %", ascending=False, na_position="last"
-            )
-        elif "Score" in df_prospects_usd.columns:
-            df_prospects_usd = df_prospects_usd[
+        if "Score" in df_prospects_usd.columns:
+            masque_us = (
                 df_prospects_usd["Score"].fillna(0).ge(min_score_us)
                 & df_prospects_usd["Risque"].fillna(100).le(max_risque_us)
                 & df_prospects_usd["Signal"].isin(filtre_signal_us)
-            ].sort_values(by=["Score", "Confiance"], ascending=[False, False], na_position="last")
+            )
+            if voir_aff_us:
+                aff_us = pd.to_numeric(df_prospects_usd.get("Pré Aff Display"), errors="coerce")
+                masque_us = masque_us | (aff_us.notna() & (aff_us != 0))
+            df_prospects_usd = df_prospects_usd[masque_us].sort_values(
+                by=["Score", "Confiance"], ascending=[False, False], na_position="last")
 
         colonnes_a_afficher_pros_us = [c for c in colonnes_base_pros if c in df_prospects_usd.columns]
         config_description = config_largeur_description(df_prospects_usd, afficher_desc, px_par_char=6, largeur_min=80, largeur_max=320)
