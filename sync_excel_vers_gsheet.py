@@ -8,7 +8,8 @@ Lit les VALEURS en cache des formules (openpyxl/pandas) — donc PAS de #REF! (c
 
 Les colonnes calculées par l'app (Prix $, Pré G %, Pré YF, MAJ YF, …) ne sont jamais touchées.
 
-À LANCER EN LOCAL, avec le Python pythoncore (accès au dossier Google Drive local C:/Users/jfilt/My Drive).
+À LANCER EN LOCAL, avec le Python pythoncore. Le dossier Google Drive local est détecté
+automatiquement selon la langue de Windows (My Drive / Mon Drive / Mon disque) via chemins_bnc.py.
 
 Pré-requis (préparation unique) :
   1. Installer les libs :  python -m pip install gspread pandas openpyxl
@@ -27,9 +28,10 @@ import pandas as pd
 import gspread
 
 # ======================== CONFIGURATION (à adapter) ========================
-CHEMIN_XLSX = r"C:\Users\jfilt\My Drive\Actions\Action_2026-c_New.xlsx"
+from chemins_bnc import dossier_actions   # Windows FR (« Mon Drive ») ou EN (« My Drive »)
+CHEMIN_XLSX = os.path.join(dossier_actions(), "Action_2026-c_New.xlsx")
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"   # JSON du compte de service (local, hors Drive)
-CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"             # journal des exécutions
+CHEMIN_LOG = os.path.join(dossier_actions(), "bnc_sync_log.txt")             # journal des exécutions
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 # Onglet -> config : nb de colonnes A.. à pousser, colonne Symbole, et plage des

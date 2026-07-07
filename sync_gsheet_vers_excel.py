@@ -22,9 +22,10 @@ from zoneinfo import ZoneInfo
 import gspread
 
 # ======================== CONFIGURATION ========================
-CHEMIN_XLSX = r"C:\Users\jfilt\My Drive\Actions\Action_2026-c_New.xlsx"
+from chemins_bnc import dossier_actions   # Windows FR (« Mon Drive ») ou EN (« My Drive »)
+CHEMIN_XLSX = os.path.join(dossier_actions(), "Action_2026-c_New.xlsx")
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
-CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"
+CHEMIN_LOG = os.path.join(dossier_actions(), "bnc_sync_log.txt")
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 # Feuille -> (première lettre, dernière lettre) de la zone à recopier vers l'Excel.

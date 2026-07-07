@@ -24,7 +24,8 @@ from datetime import datetime
 
 import gspread
 
-CHEMIN_XLSX_DEFAUT = r"C:\Users\jfilt\My Drive\Actions\Action_2026-c_New.xlsx"
+from chemins_bnc import dossier_actions   # Windows FR (« Mon Drive ») ou EN (« My Drive »)
+CHEMIN_XLSX_DEFAUT = os.path.join(dossier_actions(), "Action_2026-c_New.xlsx")
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 EPOCH_EXCEL = datetime(1899, 12, 30)

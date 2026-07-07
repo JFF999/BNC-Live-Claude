@@ -44,7 +44,8 @@ import yfinance as yf
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
 CHEMIN_CONFIG = r"C:\Users\jfilt\bnc_secrets\bnc_alertes_config.json"
 CHEMIN_ETAT = r"C:\Users\jfilt\bnc_secrets\bnc_alertes_etat.json"
-CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"
+from chemins_bnc import dossier_actions   # Windows FR (« Mon Drive ») ou EN (« My Drive »)
+CHEMIN_LOG = os.path.join(dossier_actions(), "bnc_sync_log.txt")
 NOM_GOOGLE_SHEET = "Action_2026-c_New"
 
 SEUIL_VENDRE = 5.0        # potentiel restant (%) => Vendre

@@ -21,7 +21,8 @@ import gspread
 
 # ======================== CONFIGURATION ========================
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
-CHEMIN_LOG = r"C:\Users\jfilt\My Drive\Actions\bnc_sync_log.txt"
+from chemins_bnc import dossier_actions   # Windows FR (« Mon Drive ») ou EN (« My Drive »)
+CHEMIN_LOG = os.path.join(dossier_actions(), "bnc_sync_log.txt")
 NOM_SOURCE = "Surperformance_LesAffaires"
 NOM_DEST = "Action_2026-c_New"
 
