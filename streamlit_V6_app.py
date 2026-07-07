@@ -1101,7 +1101,7 @@ try:
 
     # --- ONGLET 2 : PROSPECTS CAD ---
     with tab2:
-        col_min, col_max, col_sig = st.columns([1, 1, 2])
+        col_min, col_max, col_sig, _ = st.columns([1, 1, 4, 2])
         min_score_cad = col_min.number_input("Score min", min_value=0, max_value=100, value=55, step=5, key="cad_min_score")
         max_risque_cad = col_max.number_input("Risque max", min_value=0, max_value=100, value=85, step=5, key="cad_max_risk")
         filtre_signal_cad = col_sig.multiselect(
@@ -1150,7 +1150,7 @@ try:
 
     # --- ONGLET 3 : PROSPECTS US ---
     with tab3:
-        col_min_us, col_max_us, col_sig_us = st.columns([1, 1, 2])
+        col_min_us, col_max_us, col_sig_us, _ = st.columns([1, 1, 4, 2])
         min_score_us = col_min_us.number_input("Score min", min_value=0, max_value=100, value=55, step=5, key="usd_min_score")
         max_risque_us = col_max_us.number_input("Risque max", min_value=0, max_value=100, value=85, step=5, key="usd_max_risk")
         filtre_signal_us = col_sig_us.multiselect(
