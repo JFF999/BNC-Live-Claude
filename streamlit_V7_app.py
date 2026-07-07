@@ -1,11 +1,12 @@
 import math
 import time
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import gspread
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -519,6 +520,8 @@ with col_param:
         afficher_gain_jour = st.checkbox("Calculer le Gain du Jour", value=pref_bool('afficher_gain_jour', True))
         afficher_bandeau = st.checkbox("Afficher le Bandeau des Marchés", value=pref_bool('afficher_bandeau', False))
         afficher_alertes = st.checkbox("Activer les Alertes Intelligentes", value=pref_bool('afficher_alertes', False))
+        rafraichir_auto = st.checkbox("Rafraîchir automatiquement à l'ouverture de la bourse",
+                                      value=pref_bool('rafraichir_auto', True))
 
         # === V4 : garde-fou sur la fiabilité de l'objectif Yahoo ===
         # Un targetMeanPrice basé sur 1 seul analyste ne vaut rien. On peut exiger
@@ -580,7 +583,8 @@ with col_param:
                          ('afficher_percentile', afficher_percentile), ('afficher_concordance', afficher_concordance),
                          ('afficher_entree', afficher_entree), ('afficher_secteur', afficher_secteur),
                          ('trier_par_rang', trier_par_rang), ('afficher_baisse', afficher_baisse),
-                         ('afficher_fondamentaux', afficher_fondamentaux), ('journaliser', journaliser)):
+                         ('afficher_fondamentaux', afficher_fondamentaux), ('journaliser', journaliser),
+                         ('rafraichir_auto', rafraichir_auto)):
         cfg_courant[nom_p] = "1" if val_p else "0"
     if cfg_courant != {k: CFG_APP.get(k) for k in cfg_courant}:
         if sauvegarder_config_app(cfg_courant):
@@ -604,6 +608,21 @@ def statut_bourses():
     ouvert_ca = jour_ouvrable and en_heures and date_jour not in FERIES_CA_2026
     return ouvert_us, ouvert_ca
 
+def prochaine_ouverture():
+    """Prochain moment où AU MOINS une des deux bourses ouvre (9 h 30 + 30 s de marge)."""
+    maintenant = datetime.now(ZoneInfo("America/Toronto"))
+    for j in range(0, 8):
+        d = (maintenant + timedelta(days=j)).date()
+        ds = d.strftime("%Y-%m-%d")
+        if d.weekday() >= 5:
+            continue
+        if ds in FERIES_US_2026 and ds in FERIES_CA_2026:
+            continue
+        ouverture = datetime(d.year, d.month, d.day, 9, 30, 30, tzinfo=ZoneInfo("America/Toronto"))
+        if ouverture > maintenant:
+            return ouverture
+    return None
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def url_google_sheet():
     # URL du Google Sheet (via gspread) pour le bouton « Ouvrir Sheet ».
@@ -623,11 +642,31 @@ with col_btn:
 
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
+
+# === v7 : rafraîchissement AUTO à l'ouverture de la bourse ===
+# Si l'app est ouverte avant 9 h 30, un minuteur recharge la page pile à l'ouverture ;
+# le cache (5 min) étant expiré, les données repartent fraîches. Fenêtre max 3 h pour
+# ne pas recharger un onglet oublié la veille.
+note_auto = ""
+if rafraichir_auto and not (ouvert_us or ouvert_ca):
+    _prochaine = prochaine_ouverture()
+    if _prochaine is not None:
+        _delai_s = (_prochaine - datetime.now(ZoneInfo("America/Toronto"))).total_seconds()
+        if 0 < _delai_s <= 3 * 3600:
+            components.html(
+                f"<script>setTimeout(function() {{ window.parent.location.reload(); }}, "
+                f"{int(_delai_s * 1000)});</script>",
+                height=0
+            )
+            note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
+                         f"{_prochaine.strftime('%H:%M')}</span>")
+
 st.markdown(
     f"<div style='font-size: 13px; margin-top: -6px; margin-bottom: 6px;'>"
     f"🇺🇸 Bourse US : {'🟢 <b>Ouverte</b>' if ouvert_us else '🔴 Fermée'}"
     f" &nbsp;·&nbsp; 🇨🇦 TSX : {'🟢 <b>Ouverte</b>' if ouvert_ca else '🔴 Fermée'}"
-    f" <span style='color: gray;'>(9 h 30 – 16 h, heure de l'Est)</span></div>",
+    f" <span style='color: gray;'>(9 h 30 – 16 h, heure de l'Est)</span>"
+    f"{note_auto}</div>",
     unsafe_allow_html=True
 )
 
