@@ -489,9 +489,6 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 # équivalent (souvent déjà dans les Prospects, donc déjà téléchargé), mis à
                 # l'échelle CAD par règle de trois sur les prix actuels :
                 #   Pré YF_CAD = Objectif_US × (Prix_CAD / Prix_US)
-                # La MÊME échelle s'applique à la Pré Aff (Les Affaires) : la cible empruntée
-                # au ticker US est en $US et doit être ramenée au prix du titre .TO (ex. CDR
-                # comme NVDA.TO), sinon le Pré G % est absurde (300 $US vs prix CDR ~42 $CAD).
                 us_candidat = symbole_clean
                 for suff in ('.TO', '.V', '.NE', '.CN'):
                     if us_candidat.endswith(suff):
@@ -504,18 +501,44 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 # Garde-fou anti-collision : même société (nom Yahoo) côté CAD et US
                 nom_cad = infos_gen.get('longName') or infos_gen.get('shortName')
                 nom_us = info_us.get('longName') or info_us.get('shortName')
-                if (not hist_us.empty and 'Close' in hist_us.columns
+                if (cible_us is not None and not hist_us.empty and 'Close' in hist_us.columns
                         and _meme_societe(nom_cad, nom_us)):
                     close_us = hist_us['Close'].dropna()
                     if len(close_us) >= 1 and float(close_us.iloc[-1]) > 0:
                         prix_us = float(close_us.iloc[-1])
-                        ratio_cad = float(prix_actuel) / prix_us
-                        if cible_us is not None:
-                            df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * ratio_cad
-                        # Pré Aff (Les Affaires) empruntée au ticker US -> même mise à l'échelle CAD
-                        aff_num = pd.to_numeric(pd.Series([row.get('Pré Aff')]), errors='coerce').iloc[0]
-                        if pd.notna(aff_num) and aff_num > 0:
-                            df.at[index, 'Pré Aff'] = float(aff_num) * ratio_cad
+                        df.at[index, 'Pré 1an $ Yahoo'] = float(cible_us) * (float(prix_actuel) / prix_us)
+
+            # === Pré Aff en $US ? Mise à l'échelle CAD INDÉPENDANTE de la branche Pré YF.
+            # La synchro Affaires apparie par symbole de base (NVDA -> NVDA.TO) : la cible du
+            # Sheet peut être en $US même quand Yahoo fournit une cible native pour le .TO
+            # (l'ancien scaling, logé dans le elif ci-dessus, était alors sauté -> Pré Aff 300 $US
+            # sur NVDA.TO). Règle de PLAUSIBILITÉ (évite de convertir une cible déjà en CAD,
+            # ex. MDA.TO) : on ne convertit QUE si la valeur brute implique un gain
+            # invraisemblable (> 200 %) ET que la valeur convertie redevient plausible.
+            if symbole_clean.endswith(('.TO', '.V', '.NE', '.CN')) and prix_actuel is not None and prix_actuel > 0:
+                aff_num = pd.to_numeric(pd.Series([row.get('Pré Aff')]), errors='coerce').iloc[0]
+                seuil = 200.0
+                if pd.notna(aff_num) and aff_num > 0:
+                    gain_brut_pct = (float(aff_num) - float(prix_actuel)) / float(prix_actuel) * 100
+                    if gain_brut_pct > seuil:
+                        us_candidat2 = symbole_clean
+                        for suff in ('.TO', '.V', '.NE', '.CN'):
+                            if us_candidat2.endswith(suff):
+                                us_candidat2 = us_candidat2[:-len(suff)]
+                                break
+                        donnees_us2 = dict_yahoo.get(us_candidat2, {})
+                        info_us2 = donnees_us2.get('info', {})
+                        hist_us2 = donnees_us2.get('hist', pd.DataFrame())
+                        nom_cad2 = infos_gen.get('longName') or infos_gen.get('shortName')
+                        nom_us2 = info_us2.get('longName') or info_us2.get('shortName')
+                        if (not hist_us2.empty and 'Close' in hist_us2.columns
+                                and _meme_societe(nom_cad2, nom_us2)):
+                            close_us2 = hist_us2['Close'].dropna()
+                            if len(close_us2) >= 1 and float(close_us2.iloc[-1]) > 0:
+                                aff_cad = float(aff_num) * (float(prix_actuel) / float(close_us2.iloc[-1]))
+                                gain_cad_pct = (aff_cad - float(prix_actuel)) / float(prix_actuel) * 100
+                                if gain_cad_pct <= seuil:
+                                    df.at[index, 'Pré Aff'] = aff_cad
 
             # === V4 : nombre d'analystes derrière l'objectif (fiabilité du signal) ===
             nb_analystes = infos_gen.get('numberOfAnalystOpinions')
