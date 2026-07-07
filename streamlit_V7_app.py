@@ -1423,6 +1423,19 @@ try:
                 possede = pd.Series(False, index=df_live_prospects.index)
             possede = possede.fillna(False).astype(bool)
 
+            # Colonne Pourquoi élargie pour montrer TOUT le texte (largeur calée sur le
+            # plus long motif présent, comme pour Description).
+            config_dec = config_colonnes_communes()
+            if "Pourquoi" in df_live_prospects.columns:
+                longueurs_pq = df_live_prospects["Pourquoi"].dropna().astype(str).map(len)
+                max_pq = int(longueurs_pq.max()) if len(longueurs_pq) > 0 else 0
+                if max_pq > 0:
+                    largeur_pq = int(min(max(max_pq * 7 + 16, 200), 900))
+                    try:
+                        config_dec["Pourquoi"] = st.column_config.TextColumn("Pourquoi", width=largeur_pq)
+                    except Exception:
+                        config_dec["Pourquoi"] = st.column_config.TextColumn("Pourquoi", width="large")
+
             sections = (
                 ("🏆 Top 5 achats CAD 🇨🇦 — non détenus", "CAD", False),
                 ("💼 Top 5 CAD 🇨🇦 — déjà détenus (renforcer ?)", "CAD", True),
@@ -1441,7 +1454,7 @@ try:
                 st.dataframe(
                     top5[cols_top].style.apply(surligner_prospects, axis=1),
                     use_container_width=False, hide_index=True,
-                    column_config=config_colonnes_communes()
+                    column_config=config_dec
                 )
             st.caption("🟡 surligné = déjà détenu. Détails et filtres dans les onglets Pros.")
         else:
