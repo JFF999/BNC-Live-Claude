@@ -1414,17 +1414,22 @@ try:
             journal_rows = st.session_state.get('journal_rows', [])
 
     with tab_dec:
-        # --- Top 5 achats (meilleur Rang) ---
-        st.markdown("#### 🏆 Top 5 achats aujourd'hui")
+        # --- Top 5 achats par devise (meilleur Rang) ---
         if not df_live_prospects.empty and "Achat Rang" in df_live_prospects.columns:
-            top5 = df_live_prospects.sort_values("Achat Rang", ascending=False, na_position="last").head(5)
             cols_top = [c for c in ["Symbole", "Description", "Achat Rang", "Signal", "Prix $",
-                                    "Pré G %", "Pourquoi"] if c in top5.columns]
-            st.dataframe(
-                top5[cols_top].style.apply(surligner_prospects, axis=1),
-                use_container_width=False, hide_index=True,
-                column_config=config_colonnes_communes()
-            )
+                                    "Pré G %", "Pourquoi"] if c in df_live_prospects.columns]
+            for titre_top, devise_top in (("🏆 Top 5 achats CAD 🇨🇦", "CAD"), ("🏆 Top 5 achats US 🇺🇸", "USD")):
+                st.markdown(f"#### {titre_top}")
+                top5 = (df_live_prospects[df_live_prospects["Devise"] == devise_top]
+                        .sort_values("Achat Rang", ascending=False, na_position="last").head(5))
+                if top5.empty:
+                    st.info("Aucun prospect dans cette devise.")
+                    continue
+                st.dataframe(
+                    top5[cols_top].style.apply(surligner_prospects, axis=1),
+                    use_container_width=False, hide_index=True,
+                    column_config=config_colonnes_communes()
+                )
             st.caption("🟡 surligné = déjà détenu. Détails et filtres dans les onglets Pros.")
         else:
             st.info("Prospects non disponibles.")
