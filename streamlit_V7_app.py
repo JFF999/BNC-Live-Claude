@@ -588,6 +588,22 @@ with col_param:
             CFG_APP = st.session_state['config_app']
             st.toast("⚙️ Préférences enregistrées.", icon="💾")
 
+# === v7 : état des bourses (US et TSX : 9 h 30 – 16 h, heure de l'Est, jours ouvrables).
+# La différence entre les deux vient des jours fériés propres à chaque pays (listes 2026).
+FERIES_US_2026 = {"2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+                  "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25"}
+FERIES_CA_2026 = {"2026-01-01", "2026-02-16", "2026-04-03", "2026-05-18", "2026-07-01",
+                  "2026-08-03", "2026-09-07", "2026-10-12", "2026-12-25", "2026-12-28"}
+
+def statut_bourses():
+    maintenant = datetime.now(ZoneInfo("America/Toronto"))
+    date_jour = maintenant.strftime("%Y-%m-%d")
+    en_heures = (9, 30) <= (maintenant.hour, maintenant.minute) < (16, 0)
+    jour_ouvrable = maintenant.weekday() < 5
+    ouvert_us = jour_ouvrable and en_heures and date_jour not in FERIES_US_2026
+    ouvert_ca = jour_ouvrable and en_heures and date_jour not in FERIES_CA_2026
+    return ouvert_us, ouvert_ca
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def url_google_sheet():
     # URL du Google Sheet (via gspread) pour le bouton « Ouvrir Sheet ».
@@ -604,6 +620,16 @@ with col_btn:
     url_sheet = url_google_sheet()
     if url_sheet:
         c_sheet.link_button("📗 Ouvrir Sheet", url_sheet)
+
+# Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
+ouvert_us, ouvert_ca = statut_bourses()
+st.markdown(
+    f"<div style='font-size: 13px; margin-top: -6px; margin-bottom: 6px;'>"
+    f"🇺🇸 Bourse US : {'🟢 <b>Ouverte</b>' if ouvert_us else '🔴 Fermée'}"
+    f" &nbsp;·&nbsp; 🇨🇦 TSX : {'🟢 <b>Ouverte</b>' if ouvert_ca else '🔴 Fermée'}"
+    f" <span style='color: gray;'>(9 h 30 – 16 h, heure de l'Est)</span></div>",
+    unsafe_allow_html=True
+)
 
 # --- MOTEUR TURBO ---
 # === V4 : récupération Yahoo refondue ===========================================
