@@ -654,12 +654,15 @@ ouvert_us, ouvert_ca = statut_bourses()
 note_auto = ""
 if rafraichir_auto:
     if ouvert_us or ouvert_ca:
+        # Rechargement aux 5 min ; l'ordonnanceur (jetons_fetch) ne rafraîchit qu'UN
+        # groupe par rechargement : Portefeuille 10 min, Pros CAD 25 min, Pros US 35 min.
         components.html(
             "<script>setTimeout(function() { window.parent.location.reload(); }, "
-            f"{10 * 60 * 1000});</script>",
+            f"{5 * 60 * 1000});</script>",
             height=0
         )
-        note_auto = " &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto aux 10 min</span>"
+        note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>auto : Portef. 10 min · "
+                     "Pros CAD 25 min · Pros US 35 min</span>")
     else:
         _prochaine = prochaine_ouverture()
         if _prochaine is not None:
@@ -694,8 +697,12 @@ st.markdown(
 #                          pour réduire fortement le risque de blocage.
 # L'interface de sortie reste identique : { sym: {'hist': df, 'info': dict} }
 # ================================================================================
-@st.cache_data(ttl=300, show_spinner=False)
-def telecharger_yahoo(groupes, retry_premier=False):
+@st.cache_data(ttl=28800, show_spinner=False)
+def telecharger_yahoo(groupes, retry_premier=False, jeton=None):
+    # `jeton` ne sert qu'à contrôler le CACHE par groupe (clé de cache) :
+    #  - mode normal : jeton = tranche de 5 min -> comportement classique (ttl 5 min) ;
+    #  - mode auto en séance : jeton = compteur de version par groupe, incrémenté par
+    #    jetons_fetch() quand SON intervalle est écoulé (P1 10 min, P2 25, P3 35).
     # === v6 : récupération PAR PRIORITÉ, appelable par phase ===
     # groupes = liste ORDONNÉE de groupes de symboles (priorité décroissante).
     # PRIX : un seul appel groupé pour TOUS (robuste, jamais bloqué).
@@ -1365,6 +1372,40 @@ def config_colonnes_communes():
             cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
     return cfg
 
+# === v7 : ORDONNANCEUR de rafraîchissement PAR GROUPE (mode auto en séance) =======
+# Cadences : Portefeuille 10 min, Prospects CAD 25 min, Prospects US 35 min.
+# La page se recharge aux 5 min ; à chaque rechargement, AU PLUS UN groupe (le plus
+# prioritaire dont l'intervalle est écoulé) est réellement rafraîchi -> jamais deux
+# groupes en même temps, toujours >= 5 min entre deux appels Yahoo.
+# Les horodatages vivent dans un cache_resource (survivent aux rechargements de page).
+# ==================================================================================
+INTERVALLES_FETCH = {"P1": 10 * 60, "P2": 25 * 60, "P3": 35 * 60}
+
+@st.cache_resource
+def _etat_fetch_auto():
+    return {"last": {}, "ver": {"P1": 0, "P2": 0, "P3": 0}}
+
+def jetons_fetch(auto_seance):
+    maintenant = time.time()
+    if not auto_seance:
+        # Mode normal : tout le monde partage une tranche de 5 min (= ancien ttl 300).
+        b = int(maintenant // 300)
+        return {g: ("t", b) for g in ("P1", "P2", "P3")}
+    etat = _etat_fetch_auto()
+    last, ver = etat["last"], etat["ver"]
+    if not last:
+        # Premier chargement : les 3 groupes partent maintenant (cache vide de toute
+        # façon) ; leurs prochaines échéances (10/25/35 min) sont naturellement décalées.
+        for g in ("P1", "P2", "P3"):
+            last[g] = maintenant
+    else:
+        for g in ("P1", "P2", "P3"):   # priorité P1 > P2 > P3 ; UN seul par rechargement
+            if maintenant - last.get(g, 0) >= INTERVALLES_FETCH[g]:
+                ver[g] += 1
+                last[g] = maintenant
+                break
+    return {g: ("v", ver[g]) for g in ("P1", "P2", "P3")}
+
 try:
     with st.spinner("Connexion à Google Sheets..."):
         df_base_portefeuille = charger_donnees_base('Portefeuille BNC')
@@ -1418,8 +1459,9 @@ try:
     symboles_possedes = tuple(set(df_portefeuille_actif['Symbole'].dropna().astype(str).str.strip()))
 
     # === PHASE 1 : PORTEFEUILLE (priorité 1) — récupéré et AFFICHÉ en premier ===
+    jetons = jetons_fetch(rafraichir_auto and (ouvert_us or ouvert_ca))
     with st.spinner("Chargement du Portefeuille..."):
-        yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True)
+        yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True, jeton=jetons["P1"])
 
     # === v7 : cache YF (secours quand Yahoo bloque .info -> scores stables) ===
     if 'cache_yf' not in st.session_state:
@@ -1625,8 +1667,13 @@ try:
         )
 
     # === PHASE 2 : PROSPECTS (priorités 2 et 3) — chargés APRÈS l'affichage du Portefeuille ===
+    # Appels SÉPARÉS par groupe : chacun a son propre cache/jeton (cadences 25/35 min
+    # en mode auto ; en mode normal les jetons partagent la même tranche de 5 min).
     with st.spinner("Chargement des Prospects (CAD puis US)..."):
-        yahoo_p23 = telecharger_yahoo((g2, g3))
+        yahoo_p2 = telecharger_yahoo((g2,), jeton=jetons["P2"])
+        yahoo_p3 = telecharger_yahoo((g3,), jeton=jetons["P3"])
+    yahoo_p23 = {**{k: v for k, v in yahoo_p2.items() if k != '__statut__'},
+                 **{k: v for k, v in yahoo_p3.items() if k != '__statut__'}}
     yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
 
     df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes, plafond_scaling=plafond_preg)
@@ -1644,8 +1691,15 @@ try:
         if ok_r: st.toast("💾 Prospects synchronisés.", icon="✅")
         else: st.warning(f"Sauvegarde Prospects : {msg_r}")
 
-    # Message si Yahoo a bloqué une priorité prospects (1=CAD, 2=US)
-    statut = yahoo_p23.get('__statut__', {})
+    # Message si Yahoo a bloqué un groupe prospects (appels séparés -> statuts fusionnés :
+    # dans chaque appel mono-groupe, niveaux_ok == [1] signifie « son groupe est passé »)
+    stat2 = yahoo_p2.get('__statut__', {})
+    stat3 = yahoo_p3.get('__statut__', {})
+    statut = {
+        'bloque': bool(stat2.get('bloque')) or bool(stat3.get('bloque')),
+        'niveaux_ok': ([1] if 1 in stat2.get('niveaux_ok', []) else [])
+                      + ([2] if 1 in stat3.get('niveaux_ok', []) else []),
+    }
     if statut.get('bloque'):
         noms = {1: "Prospects CAD", 2: "Prospects US"}
         manquants = [noms[n] for n in (1, 2) if n not in statut.get('niveaux_ok', [])]
