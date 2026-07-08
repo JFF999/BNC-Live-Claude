@@ -575,9 +575,10 @@ else:
 # (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
 col_titre, col_param, col_refresh, col_sheet = st.columns(4)
 with col_titre:
+    # Sur mobile : « 📈 » seul, sinon la rangée déborde et le bouton Sheet est coupé.
     st.markdown(
-        f"<h3 style='margin: 0px; padding-top: 2px; white-space: nowrap;'>📈 "
-        f"{'BNC v8' if mobile_ui else 'BNC LIVE v8'}</h3>",
+        f"<h3 style='margin: 0px; padding-top: 2px; white-space: nowrap;'>"
+        f"{'📈' if mobile_ui else '📈 BNC LIVE v8'}</h3>",
         unsafe_allow_html=True
     )
 
@@ -2133,7 +2134,7 @@ try:
             default=["Priorité"], key="cad_signal_filter"
         )
         voir_aff_cad = st.checkbox(
-            "Ajouter tous les titres ayant une prévision Les Affaires (en plus du filtre)",
+            "Ajouter les titres ayant une prévision Les Affaires (Pré G % ≥ 5 %)",
             value=True, key="cad_voir_aff"
         )
 
@@ -2149,8 +2150,11 @@ try:
                 perime_cad = df_prospects_cad.get("Pré Aff Périmé")
                 if perime_cad is None:
                     perime_cad = pd.Series(False, index=df_prospects_cad.index)
-                # uniquement les prévisions NON périmées (non grisées)
-                masque_cad = masque_cad | (aff_cad.notna() & (aff_cad != 0) & ~perime_cad.fillna(False).astype(bool))
+                preg_cad = pd.to_numeric(df_prospects_cad.get("Pré G %"), errors="coerce")
+                # prévisions NON périmées seulement, et potentiel d'au moins 5 %
+                masque_cad = masque_cad | (aff_cad.notna() & (aff_cad != 0)
+                                           & ~perime_cad.fillna(False).astype(bool)
+                                           & (preg_cad >= 5))
             df_prospects_cad = df_prospects_cad[masque_cad]
             if trier_par_rang and "Achat Rang" in df_prospects_cad.columns:
                 df_prospects_cad = df_prospects_cad.sort_values(by="Achat Rang", ascending=False, na_position="last")
@@ -2190,7 +2194,7 @@ try:
             default=["Priorité"], key="usd_signal_filter"
         )
         voir_aff_us = st.checkbox(
-            "Ajouter tous les titres ayant une prévision Les Affaires (en plus du filtre)",
+            "Ajouter les titres ayant une prévision Les Affaires (Pré G % ≥ 5 %)",
             value=True, key="usd_voir_aff"
         )
 
@@ -2206,8 +2210,11 @@ try:
                 perime_us = df_prospects_usd.get("Pré Aff Périmé")
                 if perime_us is None:
                     perime_us = pd.Series(False, index=df_prospects_usd.index)
-                # uniquement les prévisions NON périmées (non grisées)
-                masque_us = masque_us | (aff_us.notna() & (aff_us != 0) & ~perime_us.fillna(False).astype(bool))
+                preg_us = pd.to_numeric(df_prospects_usd.get("Pré G %"), errors="coerce")
+                # prévisions NON périmées seulement, et potentiel d'au moins 5 %
+                masque_us = masque_us | (aff_us.notna() & (aff_us != 0)
+                                         & ~perime_us.fillna(False).astype(bool)
+                                         & (preg_us >= 5))
             df_prospects_usd = df_prospects_usd[masque_us]
             if trier_par_rang and "Achat Rang" in df_prospects_usd.columns:
                 df_prospects_usd = df_prospects_usd.sort_values(by="Achat Rang", ascending=False, na_position="last")
