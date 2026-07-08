@@ -2006,12 +2006,17 @@ try:
         st.session_state['sig_cache_yf'] = sig_cache
 
     with tab_dec:
-        # --- Top 5 par devise, EN CARTES (v8) ; CAD séparé détenu / non détenu ---
+        # --- Top 5 par devise, en TABLEAUX ; CAD séparé détenu / non détenu ---
         if not df_live_prospects.empty and "Achat Rang" in df_live_prospects.columns:
+            cols_top = [c for c in ["Symbole", "Description", "Achat Rang", "Signal Aff", "Prix $",
+                                    "Pré G %", "Pourquoi"] if c in df_live_prospects.columns]
             possede = df_live_prospects.get("Possede")
             if possede is None:
                 possede = pd.Series(False, index=df_live_prospects.index)
             possede = possede.fillna(False).astype(bool)
+
+            # Colonne Pourquoi élargie pour montrer TOUT le texte (helper partagé).
+            config_dec = {**config_colonnes_communes(), **config_largeur_pourquoi(df_live_prospects)}
 
             sections = (
                 ("🏆 Top 5 achats CAD 🍁 — non détenus", "CAD", False),
@@ -2024,34 +2029,25 @@ try:
                 if filtre_possede is not None:
                     sel = sel & (possede == filtre_possede)
                 top5 = (df_live_prospects[sel]
+                        .drop_duplicates(subset="Symbole Brut", keep="first")
                         .sort_values("Achat Rang", ascending=False, na_position="last").head(5))
                 if top5.empty:
                     st.info("Aucun titre dans cette catégorie.")
                     continue
-                cartes = []
-                for _, r in top5.iterrows():
-                    sym = str(r.get('Symbole Brut') or '')
-                    rang = _num(r.get('Achat Rang'))
-                    preg = _num(r.get('Pré G %'))
-                    prix = _num(r.get('Prix $'))
-                    sig = str(r.get('Signal Aff') or r.get('Signal') or '')
-                    pq = str(r.get('Pourquoi') or '')
-                    classes = 'carte-top possede' if bool(r.get('Possede')) else 'carte-top'
-                    prix_txt = '' if prix is None else f"{prix:,.2f} $"
-                    rang_txt = '' if rang is None else f"🏆 Rang {rang:.0f}"
-                    preg_txt = '' if preg is None else f"{preg:+.0f} % potentiel"
-                    preg_coul = '#9aa0a6' if preg is None else ('#00cc00' if preg > 0 else '#ff4d4d')
-                    cartes.append(
-                        f"<div class='{classes}'>"
-                        f"<div class='ct-sym'>{sym} <span style='font-weight: 400; color: gray; "
-                        f"font-size: 12px;'>{prix_txt}</span></div>"
-                        f"<div class='ct-rang'>{rang_txt}</div>"
-                        f"<div class='ct-preg' style='color: {preg_coul};'>{preg_txt}</div>"
-                        f"<div class='ct-sig'>{sig}</div>"
-                        f"<div class='ct-pq'>{pq}</div></div>"
-                    )
-                st.markdown("<div class='rangee-top'>" + "".join(cartes) + "</div>", unsafe_allow_html=True)
-            st.caption("Bordure dorée = déjà détenu. Détails et filtres dans les onglets Pros.")
+                # Style sur le DataFrame COMPLET (surligner_prospects lit 'Possede'),
+                # affichage restreint aux colonnes utiles via column_order.
+                styled_top = top5.style.apply(surligner_prospects, axis=1)
+                if 'Pré G %' in top5.columns:
+                    styled_top = styled_top.map(couleur_preg_prospect, subset=['Pré G %'])
+                if 'Signal Aff' in top5.columns:
+                    styled_top = styled_top.map(couleur_signal, subset=['Signal Aff'])
+                st.dataframe(
+                    styled_top,
+                    use_container_width=False, hide_index=True,
+                    column_order=cols_top,
+                    column_config=config_dec
+                )
+            st.caption("🟡 surligné = déjà détenu. Détails et filtres dans les onglets Pros.")
         else:
             st.info("Prospects non disponibles.")
 
