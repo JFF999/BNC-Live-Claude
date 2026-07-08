@@ -1,0 +1,4 @@
+# Thème BNC LIVE — accent vert finance (onglets, boutons, barres de progression).
+[theme]
+base = "dark"
+primaryColor = "#00A65A"

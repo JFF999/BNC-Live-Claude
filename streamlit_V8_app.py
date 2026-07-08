@@ -68,6 +68,29 @@ st.markdown("""
         }
         .alert-item { margin: 2px 0px; }
 
+        /* === v8 : cartes de statistiques (Gain total / Gain du jour / Valeur) === */
+        .stats-block {
+            background: rgba(255, 255, 255, .045);
+            border: 1px solid rgba(255, 255, 255, .09);
+            border-radius: 10px;
+            padding: 6px 14px 8px 14px;
+        }
+
+        /* === v8 : cartes Top 5 (onglet Décision) === */
+        .rangee-top { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+        .carte-top {
+            flex: 1 1 165px; max-width: 240px;
+            background: rgba(255, 255, 255, .05);
+            border: 1px solid rgba(255, 255, 255, .10);
+            border-radius: 12px; padding: 10px 12px;
+        }
+        .carte-top.possede { border-color: rgba(255, 215, 0, .55); }
+        .ct-sym  { font-weight: 700; font-size: 16px; margin-bottom: 2px; }
+        .ct-rang { color: #00A65A; font-weight: 600; font-size: 13px; }
+        .ct-preg { font-size: 14px; font-weight: 600; margin: 2px 0px; }
+        .ct-sig  { font-size: 12px; }
+        .ct-pq   { font-size: 11px; color: gray; margin-top: 4px; line-height: 1.35; }
+
         /* === v7 : sur MOBILE, garder Score min / Risque max côte à côte (Streamlit
            empile les colonnes sur écran étroit). Les Signaux passent en pleine largeur. */
         @media (max-width: 640px) {
@@ -498,9 +521,7 @@ def sauvegarder_cache_yf(df_port, df_pros):
     except Exception:
         return False
 
-# --- TITRE PRINCIPAL ---
-st.title("📈 BNC LIVE v7")
-
+# --- TITRE (v8 : compact, sur la même ligne que les boutons) ---
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
 
@@ -541,10 +562,6 @@ def orientation_paysage():
     except Exception:
         return False
 
-# --- HAUT DE PAGE : Paramètres + Rafraîchir + Sheet sur UNE seule ligne ---
-# (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
-col_param, col_refresh, col_sheet = st.columns(3)
-
 # Libellés compacts sur mobile (mode connu AVANT le popover grâce à la préférence
 # persistée ; « Auto » retombe sur la détection User-Agent).
 _mode_pref = CFG_APP.get('mode_affichage', 'Auto (détection)')
@@ -553,6 +570,16 @@ if _mode_pref == 'Auto (détection)':
     mobile_ui = est_mobile() and not orientation_paysage()
 else:
     mobile_ui = (_mode_pref == 'Mobile (essentiel)')
+
+# --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet sur UNE seule ligne ---
+# (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
+col_titre, col_param, col_refresh, col_sheet = st.columns(4)
+with col_titre:
+    st.markdown(
+        f"<h3 style='margin: 0px; padding-top: 2px; white-space: nowrap;'>📈 "
+        f"{'BNC v8' if mobile_ui else 'BNC LIVE v8'}</h3>",
+        unsafe_allow_html=True
+    )
 
 with col_param:
     with st.popover("⚙️" if mobile_ui else "⚙️ Paramètres"):
@@ -760,10 +787,11 @@ if rafraichir_auto:
                 note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
                              f"{_prochaine.strftime('%H:%M')}</span>")
 
+# (v8 : 💵/🍁 au lieu des drapeaux emoji — Windows ne rend pas 🇺🇸/🇨🇦)
 st.markdown(
     f"<div style='font-size: 13px; margin-top: -6px; margin-bottom: 6px;'>"
-    f"🇺🇸 Bourse US : {'🟢 <b>Ouverte</b>' if ouvert_us else '🔴 Fermée'}"
-    f" &nbsp;·&nbsp; 🇨🇦 TSX : {'🟢 <b>Ouverte</b>' if ouvert_ca else '🔴 Fermée'}"
+    f"💵 Bourse US : {'🟢 <b>Ouverte</b>' if ouvert_us else '🔴 Fermée'}"
+    f" &nbsp;·&nbsp; 🍁 TSX : {'🟢 <b>Ouverte</b>' if ouvert_ca else '🔴 Fermée'}"
     f" <span style='color: gray;'>(9 h 30 – 16 h, heure de l'Est)</span>"
     f"{note_auto}</div>",
     unsafe_allow_html=True
@@ -1378,6 +1406,16 @@ def calculer_score_decision(df, pour_portefeuille=False, secteurs_portefeuille=N
     # Explication lisible ("Pourquoi") — utile surtout pour les Prospects.
     df["Pourquoi"] = df.apply(_pourquoi_achat, axis=1)
 
+    # === v8 : version AFFICHAGE du signal avec icône. La colonne logique 'Signal'
+    # reste intacte (filtres, journal, alertes comparent les libellés exacts).
+    if pour_portefeuille:
+        icones = {"Vendre": "🔴", "À surveiller": "🟡", "Attendre": "🟢"}
+    else:
+        icones = {"Priorité": "⭐", "À surveiller": "🔵", "À valider": "🟡",
+                  "Risque élevé": "🔴", "Objectif atteint": "⚪", "Secondaire": "▫️",
+                  "Données insuffisantes": "⚪"}
+    df["Signal Aff"] = df["Signal"].map(lambda s: f"{icones[s]} {s}" if s in icones else s)
+
     return df
 
 def couleur_var(valeur):
@@ -1395,6 +1433,20 @@ def couleur_baisse_fabrique(seuil):
         return ''
     return couleur_baisse
 
+def couleur_preg_prospect(valeur):
+    # === v8 : dégradé continu sur le potentiel des Prospects ===
+    # <= 0 % : rouge ; 0 -> 40 % : interpolation jaune -> vert ; > 40 % : vert plein.
+    if pd.isna(valeur):
+        return ''
+    v = float(valeur)
+    if v <= 0:
+        return 'background-color: rgba(217, 75, 75, .28);'
+    t = min(v, 40.0) / 40.0
+    r = int(255 + (0 - 255) * t)
+    g = int(209 + (166 - 209) * t)
+    b = int(102 + (90 - 102) * t)
+    return f'background-color: rgba({r}, {g}, {b}, .25);'
+
 def couleur_alerte_vente(valeur):
     if pd.isna(valeur): return ''
     if valeur <= 5: return 'background-color: rgba(255, 0, 0, 0.3)'
@@ -1402,6 +1454,7 @@ def couleur_alerte_vente(valeur):
     else: return 'background-color: rgba(0, 255, 0, 0.3)'
 
 def couleur_signal(valeur):
+    # v8 : correspondance par INCLUSION (la valeur affichée porte une icône, ex. « ⭐ Priorité »)
     couleurs = {
         "Priorité": "background-color: rgba(0, 166, 90, .22);",
         "À surveiller": "background-color: rgba(106, 169, 255, .20);",
@@ -1409,7 +1462,11 @@ def couleur_signal(valeur):
         "Risque élevé": "background-color: rgba(217, 75, 75, .22);",
         "Objectif atteint": "background-color: rgba(127, 127, 127, .18);",
     }
-    return couleurs.get(valeur, "")
+    v = str(valeur)
+    for cle, style in couleurs.items():
+        if cle in v:
+            return style
+    return ""
 
 def couleur_signal_portefeuille(valeur):
     # Vendre = rouge, À surveiller = jaune, Attendre = vert (comme la colonne Pré G %).
@@ -1418,7 +1475,11 @@ def couleur_signal_portefeuille(valeur):
         "À surveiller": "background-color: rgba(255, 209, 102, .28);",
         "Attendre": "background-color: rgba(0, 166, 90, .22);",
     }
-    return couleurs.get(valeur, "")
+    v = str(valeur)
+    for cle, style in couleurs.items():
+        if cle in v:
+            return style
+    return ""
 
 def surligner_prospects(row):
     if row.get('Possede') == True: return ['background-color: rgba(255, 215, 0, 0.4)'] * len(row)
@@ -1498,6 +1559,7 @@ def config_colonnes_communes():
         "Secteur": st.column_config.TextColumn("Secteur", width="small"),
         "Pourquoi": st.column_config.TextColumn("Pourquoi", width="medium"),
         "Signal": st.column_config.TextColumn("Signal", width="small"),
+        "Signal Aff": st.column_config.TextColumn("Signal", width="small"),
         "Date Achat": st.column_config.DatetimeColumn("Date Achat", format="YYYY-MM-DD"),
         "MAJ YF": st.column_config.TextColumn("Date YF", width="small"),
         "MAJ Aff": st.column_config.TextColumn("Date Aff", width="small"),
@@ -1640,9 +1702,9 @@ try:
                 m_veille = m_data['Close'].iloc[-2]
                 m_var = (m_actuel - m_veille) / m_veille * 100
                 m_signe = "+" if m_var > 0 else ""
-                cols_m[idx].markdown(f"<div class='market-block'>**{nom_m}** : {m_actuel:,.2f} (<span style='color:{'#00cc00' if m_var > 0 else '#ff4d4d'}'>{m_signe}{m_var:.2f}%</span>)</div>", unsafe_allow_html=True)
+                cols_m[idx].markdown(f"<div class='market-block'><b>{nom_m}</b> : {m_actuel:,.2f} (<span style='color:{'#00cc00' if m_var > 0 else '#ff4d4d'}'>{m_signe}{m_var:.2f}%</span>)</div>", unsafe_allow_html=True)
             else:
-                cols_m[idx].markdown(f"<div class='market-block'>**{nom_m}** : Indisponible</div>", unsafe_allow_html=True)
+                cols_m[idx].markdown(f"<div class='market-block'><b>{nom_m}</b> : Indisponible</div>", unsafe_allow_html=True)
         st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
     # Emplacements réservés en HAUT (remplis quand les prospects sont chargés, phase 2)
@@ -1664,7 +1726,7 @@ try:
 
     # Portefeuille : seul le Signal (Vendre / À surveiller / Attendre) est affiché.
     # Score / Confiance / Risque restent réservés aux onglets Pros.
-    if afficher_signal: colonnes_base_port.append("Signal")
+    if afficher_signal: colonnes_base_port.append("Signal Aff")
 
     if afficher_var: colonnes_base_port.append("Var %")
     if afficher_baisse: colonnes_base_port.append("Baisse 52s %")     # === v7 ===
@@ -1681,7 +1743,7 @@ try:
     colonnes_base_pros = []
     colonnes_base_pros.append("Symbole")
     if afficher_desc: colonnes_base_pros.append("Description")
-    if afficher_signal: colonnes_base_pros.append("Signal")
+    if afficher_signal: colonnes_base_pros.append("Signal Aff")
     if afficher_score: colonnes_base_pros.append("Score")
     if afficher_confiance: colonnes_base_pros.append("Confiance")
     if afficher_risque: colonnes_base_pros.append("Risque")
@@ -1708,8 +1770,8 @@ try:
     # === v7 : MODE MOBILE — on ne garde que les colonnes ESSENTIELLES (l'ordre des
     # listes est préservé). Sur ordinateur, tous les détails restent affichés.
     if mode_mobile:
-        ESSENTIEL_PORT = {"Symbole", "Prix $", "Gain %", "Signal", "Pré G %"}
-        ESSENTIEL_PROS = {"Symbole", "Signal", "Achat Rang", "Prix $", "Pré G %", "Pré Aff Display"}
+        ESSENTIEL_PORT = {"Symbole", "Prix $", "Gain %", "Signal Aff", "Pré G %"}
+        ESSENTIEL_PROS = {"Symbole", "Signal Aff", "Achat Rang", "Prix $", "Pré G %", "Pré Aff Display"}
         colonnes_base_port = [c for c in colonnes_base_port if c in ESSENTIEL_PORT]
         colonnes_base_pros = [c for c in colonnes_base_pros if c in ESSENTIEL_PROS]
         st.caption("📱 Mode mobile : colonnes essentielles (changer dans ⚙️ Paramètres → Mode d'affichage).")
@@ -1761,17 +1823,23 @@ try:
 
         cols_s = st.columns(3) if afficher_gain_jour else st.columns(2)
 
+        # === v8 : cartes colorées — le Gain total est vert/rouge avec flèche, comme le Gain du jour ===
+        coul_gain = '#00cc00' if gain_total_net >= 0 else '#ff4d4d'
+        fleche_gain = '▲ ' if gain_total_net > 0 else ('▼ ' if gain_total_net < 0 else '')
+        coul_jour = '#00cc00' if gain_jour_total_net >= 0 else '#ff4d4d'
+        fleche_jour = '▲ ' if gain_jour_total_net > 0 else ('▼ ' if gain_jour_total_net < 0 else '')
+
         with cols_s[0]:
-            st.markdown(f"<div class='stats-block' style='text-align: left; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_gain}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{gain_formate}</p></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='stats-block' style='text-align: left;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_gain}</p><p style='margin: 0px; font-size: 16px; font-weight: bold; color: {coul_gain};'>{fleche_gain}{gain_formate}</p></div>", unsafe_allow_html=True)
 
         if afficher_gain_jour:
             with cols_s[1]:
-                st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_gain_j}</p><p style='margin: 0px; font-size: 16px; font-weight: bold; color: {'#00cc00' if gain_jour_total_net >= 0 else '#ff4d4d'};'>{"+" if gain_jour_total_net > 0 else ""}{gain_j_formate}</p></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='stats-block' style='text-align: center;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_gain_j}</p><p style='margin: 0px; font-size: 16px; font-weight: bold; color: {coul_jour};'>{fleche_jour}{gain_j_formate}</p></div>", unsafe_allow_html=True)
 
         idx_val = 2 if afficher_gain_jour else 1
 
         with cols_s[idx_val]:
-            st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='stats-block' style='text-align: center;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
 
         # Pré G % se trie en ordre CROISSANT (titres proches/au-dessus de l'objectif = à surveiller en haut).
         if colonne_tri == "Pré G %":
@@ -1789,8 +1857,8 @@ try:
             styled_port = styled_port.map(couleur_var, subset=['Var %'])
         if afficher_baisse and 'Baisse 52s %' in df_live.columns:
             styled_port = styled_port.map(couleur_baisse_fabrique(seuil_baisse), subset=['Baisse 52s %'])
-        if 'Signal' in df_live.columns:
-            styled_port = styled_port.map(couleur_signal_portefeuille, subset=['Signal'])
+        if 'Signal Aff' in df_live.columns:
+            styled_port = styled_port.map(couleur_signal_portefeuille, subset=['Signal Aff'])
         if 'Pré Aff Périmé' in df_live.columns:
             styled_port = styled_port.apply(griser_pre_aff_perime, axis=1)
 
@@ -1913,22 +1981,17 @@ try:
         st.session_state['sig_cache_yf'] = sig_cache
 
     with tab_dec:
-        # --- Top 5 achats par devise (meilleur Rang) ; CAD séparé détenu / non détenu ---
+        # --- Top 5 par devise, EN CARTES (v8) ; CAD séparé détenu / non détenu ---
         if not df_live_prospects.empty and "Achat Rang" in df_live_prospects.columns:
-            cols_top = [c for c in ["Symbole", "Description", "Achat Rang", "Signal", "Prix $",
-                                    "Pré G %", "Pourquoi"] if c in df_live_prospects.columns]
             possede = df_live_prospects.get("Possede")
             if possede is None:
                 possede = pd.Series(False, index=df_live_prospects.index)
             possede = possede.fillna(False).astype(bool)
 
-            # Colonne Pourquoi élargie pour montrer TOUT le texte (helper partagé).
-            config_dec = {**config_colonnes_communes(), **config_largeur_pourquoi(df_live_prospects)}
-
             sections = (
-                ("🏆 Top 5 achats CAD 🇨🇦 — non détenus", "CAD", False),
-                ("💼 Top 5 CAD 🇨🇦 — déjà détenus (renforcer ?)", "CAD", True),
-                ("🏆 Top 5 achats US 🇺🇸", "USD", None),
+                ("🏆 Top 5 achats CAD 🍁 — non détenus", "CAD", False),
+                ("💼 Top 5 CAD 🍁 — déjà détenus (renforcer ?)", "CAD", True),
+                ("🏆 Top 5 achats US 💵", "USD", None),
             )
             for titre_top, devise_top, filtre_possede in sections:
                 st.markdown(f"#### {titre_top}")
@@ -1940,12 +2003,30 @@ try:
                 if top5.empty:
                     st.info("Aucun titre dans cette catégorie.")
                     continue
-                st.dataframe(
-                    top5[cols_top].style.apply(surligner_prospects, axis=1),
-                    use_container_width=False, hide_index=True,
-                    column_config=config_dec
-                )
-            st.caption("🟡 surligné = déjà détenu. Détails et filtres dans les onglets Pros.")
+                cartes = []
+                for _, r in top5.iterrows():
+                    sym = str(r.get('Symbole Brut') or '')
+                    rang = _num(r.get('Achat Rang'))
+                    preg = _num(r.get('Pré G %'))
+                    prix = _num(r.get('Prix $'))
+                    sig = str(r.get('Signal Aff') or r.get('Signal') or '')
+                    pq = str(r.get('Pourquoi') or '')
+                    classes = 'carte-top possede' if bool(r.get('Possede')) else 'carte-top'
+                    prix_txt = '' if prix is None else f"{prix:,.2f} $"
+                    rang_txt = '' if rang is None else f"🏆 Rang {rang:.0f}"
+                    preg_txt = '' if preg is None else f"{preg:+.0f} % potentiel"
+                    preg_coul = '#9aa0a6' if preg is None else ('#00cc00' if preg > 0 else '#ff4d4d')
+                    cartes.append(
+                        f"<div class='{classes}'>"
+                        f"<div class='ct-sym'>{sym} <span style='font-weight: 400; color: gray; "
+                        f"font-size: 12px;'>{prix_txt}</span></div>"
+                        f"<div class='ct-rang'>{rang_txt}</div>"
+                        f"<div class='ct-preg' style='color: {preg_coul};'>{preg_txt}</div>"
+                        f"<div class='ct-sig'>{sig}</div>"
+                        f"<div class='ct-pq'>{pq}</div></div>"
+                    )
+                st.markdown("<div class='rangee-top'>" + "".join(cartes) + "</div>", unsafe_allow_html=True)
+            st.caption("Bordure dorée = déjà détenu. Détails et filtres dans les onglets Pros.")
         else:
             st.info("Prospects non disponibles.")
 
@@ -1964,7 +2045,7 @@ try:
             baisses = df_live[pd.to_numeric(df_live['Baisse 52s %'], errors='coerce') <= -abs(seuil_baisse)]
             if not baisses.empty:
                 st.markdown(f"#### ↘ Repli de plus de {seuil_baisse} % depuis le sommet 52 sem")
-                cols_b = [c for c in ["Symbole", "Description", "Prix $", "Gain %", "Baisse 52s %", "Signal"] if c in baisses.columns]
+                cols_b = [c for c in ["Symbole", "Description", "Prix $", "Gain %", "Baisse 52s %", "Signal Aff"] if c in baisses.columns]
                 st.dataframe(
                     baisses.sort_values('Baisse 52s %')[cols_b],
                     use_container_width=False, hide_index=True,
@@ -2084,8 +2165,10 @@ try:
         styled_cad = df_prospects_cad.style.apply(surligner_prospects, axis=1)
         if afficher_var and 'Var %' in df_prospects_cad.columns:
             styled_cad = styled_cad.map(couleur_var, subset=['Var %'])
-        if 'Signal' in df_prospects_cad.columns:
-            styled_cad = styled_cad.map(couleur_signal, subset=['Signal'])
+        if 'Pré G %' in df_prospects_cad.columns:
+            styled_cad = styled_cad.map(couleur_preg_prospect, subset=['Pré G %'])   # === v8 : dégradé ===
+        if 'Signal Aff' in df_prospects_cad.columns:
+            styled_cad = styled_cad.map(couleur_signal, subset=['Signal Aff'])
         if 'Pré Aff Périmé' in df_prospects_cad.columns:
             styled_cad = styled_cad.apply(griser_pre_aff_perime, axis=1)
 
@@ -2139,8 +2222,10 @@ try:
         styled_usd = df_prospects_usd.style.apply(surligner_prospects, axis=1)
         if afficher_var and 'Var %' in df_prospects_usd.columns:
             styled_usd = styled_usd.map(couleur_var, subset=['Var %'])
-        if 'Signal' in df_prospects_usd.columns:
-            styled_usd = styled_usd.map(couleur_signal, subset=['Signal'])
+        if 'Pré G %' in df_prospects_usd.columns:
+            styled_usd = styled_usd.map(couleur_preg_prospect, subset=['Pré G %'])   # === v8 : dégradé ===
+        if 'Signal Aff' in df_prospects_usd.columns:
+            styled_usd = styled_usd.map(couleur_signal, subset=['Signal Aff'])
         if 'Pré Aff Périmé' in df_prospects_usd.columns:
             styled_usd = styled_usd.apply(griser_pre_aff_perime, axis=1)
 
