@@ -1794,7 +1794,7 @@ try:
         ESSENTIEL_PROS = {"Symbole", "Signal Aff", "Achat Rang", "Prix $", "Pré G %", "Pré Aff Display"}
         colonnes_base_port = [c for c in colonnes_base_port if c in ESSENTIEL_PORT]
         colonnes_base_pros = [c for c in colonnes_base_pros if c in ESSENTIEL_PROS]
-        st.caption("📱 Mode mobile : colonnes essentielles (changer dans ⚙️ Paramètres → Mode d'affichage).")
+        st.caption("📱 Mode mobile")
 
     tab1, tab_dec, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🧭 Décision", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
 
