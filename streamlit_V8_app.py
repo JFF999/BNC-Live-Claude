@@ -798,13 +798,14 @@ if rafraichir_auto:
                 note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
                              f"{_prochaine.strftime('%H:%M')}</span>")
 
-# (v8 : 💵/🍁 au lieu des drapeaux emoji — Windows ne rend pas 🇺🇸/🇨🇦)
+# (v8 : 💵/🍁 au lieu des drapeaux emoji — Windows ne rend pas 🇺🇸/🇨🇦 ;
+#  les heures d'ouverture ne sont affichées que sur PC pour économiser l'espace mobile)
+heures_txt = "" if mobile_ui else " <span style='color: gray;'>(9 h 30 – 16 h, heure de l'Est)</span>"
 st.markdown(
     f"<div style='font-size: 13px; margin-top: -6px; margin-bottom: 6px;'>"
     f"💵 Bourse US : {'🟢 <b>Ouverte</b>' if ouvert_us else '🔴 Fermée'}"
     f" &nbsp;·&nbsp; 🍁 TSX : {'🟢 <b>Ouverte</b>' if ouvert_ca else '🔴 Fermée'}"
-    f" <span style='color: gray;'>(9 h 30 – 16 h, heure de l'Est)</span>"
-    f"{note_auto}</div>",
+    f"{heures_txt}{note_auto}</div>",
     unsafe_allow_html=True
 )
 
@@ -1583,10 +1584,10 @@ def config_colonnes_communes():
         except Exception:
             cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
     else:
-        # === v8 : sur PC, colonne Signal assez large pour tout le texte
-        # (« 🟡 À surveiller », « ⚪ Objectif atteint », ...).
+        # === v8 : sur PC, colonne Signal JUSTE assez large pour le plus long libellé
+        # (« ⚪ Objectif atteint ») — on maximise l'espace des autres colonnes.
         try:
-            cfg["Signal Aff"] = st.column_config.TextColumn("Signal", width=170)
+            cfg["Signal Aff"] = st.column_config.TextColumn("Signal", width=132)
         except Exception:
             cfg["Signal Aff"] = st.column_config.TextColumn("Signal", width="medium")
     return cfg
@@ -1725,8 +1726,7 @@ try:
                 cols_m[idx].markdown(f"<div class='market-block'><b>{nom_m}</b> : Indisponible</div>", unsafe_allow_html=True)
         st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # Emplacements réservés en HAUT (remplis quand les prospects sont chargés, phase 2)
-    ph_messages = st.empty()
+    # Emplacement réservé en HAUT (rempli quand les prospects sont chargés, phase 2)
     ph_alertes = st.empty()
 
     # --- ARCHITECTURE DES COLONNES (Unifiée pour tous les onglets) ---
@@ -1912,8 +1912,9 @@ try:
         if ok_r: st.toast("💾 Prospects synchronisés.", icon="✅")
         else: st.warning(f"Sauvegarde Prospects : {msg_r}")
 
-    # Message si Yahoo a bloqué un groupe prospects (appels séparés -> statuts fusionnés :
-    # dans chaque appel mono-groupe, niveaux_ok == [1] signifie « son groupe est passé »)
+    # Statuts par groupe (dans chaque appel mono-groupe, niveaux_ok == [1] = réussi).
+    # v8 : plus de message « Yahoo a limité les requêtes » — la ligne « Dernière synchro
+    # réussie » suffit (une heure qui ne bouge pas = groupe non rafraîchi).
     stat2 = yahoo_p2.get('__statut__', {})
     stat3 = yahoo_p3.get('__statut__', {})
 
@@ -1932,19 +1933,6 @@ try:
         f" &nbsp;·&nbsp; Pros US : <b>{_fmt_sync(synchros.get('Pros US'))}</b></div>",
         unsafe_allow_html=True
     )
-
-    statut = {
-        'bloque': bool(stat2.get('bloque')) or bool(stat3.get('bloque')),
-        'niveaux_ok': ([1] if 1 in stat2.get('niveaux_ok', []) else [])
-                      + ([2] if 1 in stat3.get('niveaux_ok', []) else []),
-    }
-    if statut.get('bloque'):
-        noms = {1: "Prospects CAD", 2: "Prospects US"}
-        manquants = [noms[n] for n in (1, 2) if n not in statut.get('niveaux_ok', [])]
-        if manquants:
-            ph_messages.info("⏳ Yahoo a limité les requêtes — non mis à jour ce coup-ci : "
-                             + ", ".join(manquants)
-                             + " (valeurs précédentes conservées). Réessaie un peu plus tard.")
 
     # Alertes (Portefeuille + Prospects) -> emplacement réservé en haut
     if afficher_alertes:
