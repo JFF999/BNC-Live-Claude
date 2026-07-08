@@ -560,6 +560,12 @@ with col_param:
         source_gain = st.selectbox("Calcul du Gain", OPTIONS_GAIN,
                                    index=pref_index('source_gain', OPTIONS_GAIN, 2))
 
+        # Tri du Portefeuille (déplacé depuis l'entête de l'onglet ; persisté).
+        # Pré G % se trie en ordre CROISSANT (proches de l'objectif en haut).
+        OPTIONS_TRI_PORT = ["Pré G %", "Gain %"]
+        colonne_tri = st.selectbox("Tri du Portefeuille", OPTIONS_TRI_PORT,
+                                   index=pref_index('tri_portefeuille', OPTIONS_TRI_PORT, 1))
+
         # === v7 : mode d'affichage — sur téléphone, colonnes ESSENTIELLES seulement ===
         OPTIONS_MODE = ["Auto (détection)", "Ordinateur (complet)", "Mobile (essentiel)"]
         mode_affichage = st.selectbox(
@@ -648,6 +654,7 @@ with col_param:
     # === v7 : sauvegarde silencieuse des préférences quand elles changent ===
     cfg_courant = {
         'source_gain': source_gain, 'mode_affichage': mode_affichage,
+        'tri_portefeuille': colonne_tri,
         'min_analystes': str(min_analystes), 'mois_max_aff': str(mois_max_aff),
         'plafond_preg': str(plafond_preg), 'seuil_baisse': str(seuil_baisse),
     }
@@ -1752,7 +1759,7 @@ try:
         gain_j_formate = f"{gain_jour_total_net:,.2f} {symbole_devise}".replace(',', ' ')
         valeur_formate = f"{valeur_totale_nette:,.2f} {symbole_devise}".replace(',', ' ')
 
-        cols_s = st.columns([2.5, 2.5, 2.5, 1.8]) if afficher_gain_jour else st.columns([3, 3, 2])
+        cols_s = st.columns(3) if afficher_gain_jour else st.columns(2)
 
         with cols_s[0]:
             st.markdown(f"<div class='stats-block' style='text-align: left; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_gain}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{gain_formate}</p></div>", unsafe_allow_html=True)
@@ -1762,13 +1769,9 @@ try:
                 st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_gain_j}</p><p style='margin: 0px; font-size: 16px; font-weight: bold; color: {'#00cc00' if gain_jour_total_net >= 0 else '#ff4d4d'};'>{"+" if gain_jour_total_net > 0 else ""}{gain_j_formate}</p></div>", unsafe_allow_html=True)
 
         idx_val = 2 if afficher_gain_jour else 1
-        idx_tri = 3 if afficher_gain_jour else 2
 
         with cols_s[idx_val]:
             st.markdown(f"<div class='stats-block' style='text-align: center; padding-top: 5px;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
-
-        with cols_s[idx_tri]:
-            colonne_tri = st.selectbox("Tri", ["Pré G %", "Gain %"], index=1, key="tri_portefeuille", label_visibility="collapsed")
 
         # Pré G % se trie en ordre CROISSANT (titres proches/au-dessus de l'objectif = à surveiller en haut).
         if colonne_tri == "Pré G %":
