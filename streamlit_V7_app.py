@@ -86,10 +86,43 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# === v7 : rechargement du PARENT depuis un composant (iframe SANDBOXÉE sans
+# allow-top-navigation : location.replace/reload sur le parent est BLOQUÉ par le
+# navigateur). Stratégie à 3 étages : navigation directe si permise, sinon clic sur
+# un lien créé dans le document PARENT (même origine -> navigation attribuée au
+# parent), sinon meta refresh injecté dans le <head> du parent.
+JS_RECHARGER_PARENT = """
+    function rechargerParent(urlCible) {
+        const p = window.parent;
+        try { p.location.replace(urlCible); return; }
+        catch (e) { try { p.console.log('BNC: nav directe bloquee -', e.message); } catch (_) {} }
+        try {
+            const a = p.document.createElement('a');
+            a.href = urlCible; a.style.display = 'none';
+            p.document.body.appendChild(a);
+            a.click();
+            a.remove();
+            return;
+        } catch (e) { try { p.console.log('BNC: lien parent bloque -', e.message); } catch (_) {} }
+        try {
+            const m = p.document.createElement('meta');
+            m.httpEquiv = 'refresh';
+            m.content = '0;url=' + urlCible;
+            p.document.head.appendChild(m);
+        } catch (e) { try { p.console.log('BNC: meta refresh bloque -', e.message); } catch (_) {} }
+    }
+"""
+
 def est_mobile():
     # === v7 : détection téléphone via le User-Agent du navigateur (st.context,
     # Streamlit >= 1.37). Les navigateurs mobiles annoncent "Mobi" / "Android" /
     # "iPhone". En cas de doute (vieille version, en-tête absent) -> ordinateur.
+    # ?mobile=1 dans l'URL force le mode téléphone (utile pour tester depuis un PC).
+    try:
+        if st.query_params.get("mobile", "") == "1":
+            return True
+    except Exception:
+        pass
     try:
         ua = str(st.context.headers.get("User-Agent", "")).lower()
     except Exception:
@@ -479,6 +512,7 @@ taux_usdcad = obtenir_taux_change()
 if est_mobile():
     components.html("""
     <script>
+    """ + JS_RECHARGER_PARENT + """
     (function() {
         function verifier() {
             try {
@@ -487,9 +521,9 @@ if est_mobile():
                 const url = new URL(p.location.href);
                 if (url.searchParams.get('orient') !== actuel) {
                     url.searchParams.set('orient', actuel);
-                    p.location.replace(url.toString());
+                    rechargerParent(url.toString());
                 }
-            } catch (e) {}
+            } catch (e) { try { window.parent.console.log('BNC orient:', e.message); } catch (_) {} }
         }
         verifier();
         let t = null;
@@ -698,7 +732,8 @@ if rafraichir_auto:
         # Rechargement aux 5 min ; l'ordonnanceur (jetons_fetch) ne rafraîchit qu'UN
         # groupe par rechargement : Portefeuille 10 min, Pros CAD 25 min, Pros US 35 min.
         components.html(
-            "<script>setTimeout(function() { window.parent.location.reload(); }, "
+            "<script>" + JS_RECHARGER_PARENT +
+            "setTimeout(function() { rechargerParent(window.parent.location.href); }, "
             f"{5 * 60 * 1000});</script>",
             height=0
         )
@@ -710,7 +745,8 @@ if rafraichir_auto:
             _delai_s = (_prochaine - datetime.now(ZoneInfo("America/Toronto"))).total_seconds()
             if 0 < _delai_s <= 3 * 3600:
                 components.html(
-                    f"<script>setTimeout(function() {{ window.parent.location.reload(); }}, "
+                    "<script>" + JS_RECHARGER_PARENT +
+                    "setTimeout(function() { rechargerParent(window.parent.location.href); }, "
                     f"{int(_delai_s * 1000)});</script>",
                     height=0
                 )

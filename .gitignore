@@ -1,0 +1,6 @@
+# Secrets locaux — ne JAMAIS committer
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
