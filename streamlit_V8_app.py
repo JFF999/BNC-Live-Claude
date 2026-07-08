@@ -1582,6 +1582,13 @@ def config_colonnes_communes():
             cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width=45)
         except Exception:
             cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
+    else:
+        # === v8 : sur PC, colonne Signal assez large pour tout le texte
+        # (« 🟡 À surveiller », « ⚪ Objectif atteint », ...).
+        try:
+            cfg["Signal Aff"] = st.column_config.TextColumn("Signal", width=170)
+        except Exception:
+            cfg["Signal Aff"] = st.column_config.TextColumn("Signal", width="medium")
     return cfg
 
 # === v7 : ORDONNANCEUR de rafraîchissement PAR GROUPE (mode auto en séance) =======
