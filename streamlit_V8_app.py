@@ -782,8 +782,9 @@ if rafraichir_auto:
             f"{5 * 60 * 1000});</script>",
             height=0
         )
-        note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>auto : Portef. 10 min · "
-                     "Pros CAD 25 min · Pros US 35 min</span>")
+        if not mobile_ui:   # v8 : note masquée sur mobile (le minuteur tourne quand même)
+            note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>auto : Portef. 10 min · "
+                         "Pros CAD 25 min · Pros US 35 min</span>")
     else:
         _prochaine = prochaine_ouverture()
         if _prochaine is not None:
@@ -795,8 +796,9 @@ if rafraichir_auto:
                     f"{int(_delai_s * 1000)});</script>",
                     height=0
                 )
-                note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
-                             f"{_prochaine.strftime('%H:%M')}</span>")
+                if not mobile_ui:   # v8 : note masquée sur mobile (le minuteur tourne quand même)
+                    note_auto = (" &nbsp;·&nbsp; ⏱ <span style='color: gray;'>rafraîchissement auto à "
+                                 f"{_prochaine.strftime('%H:%M')}</span>")
 
 # (v8 : 💵/🍁 au lieu des drapeaux emoji — Windows ne rend pas 🇺🇸/🇨🇦 ;
 #  les heures d'ouverture ne sont affichées que sur PC pour économiser l'espace mobile)
@@ -1926,13 +1928,23 @@ try:
         synchros['Pros CAD'] = yahoo_p2.get('__horodatage__', '')
     if 1 in stat3.get('niveaux_ok', []):
         synchros['Pros US'] = yahoo_p3.get('__horodatage__', '')
-    ph_sync.markdown(
-        f"<div style='font-size: 12px; color: gray; margin-top: -4px; margin-bottom: 6px;'>"
-        f"🕒 Dernière synchro réussie — Portefeuille : <b>{_fmt_sync(synchros.get('Portefeuille'))}</b>"
-        f" &nbsp;·&nbsp; Pros CAD : <b>{_fmt_sync(synchros.get('Pros CAD'))}</b>"
-        f" &nbsp;·&nbsp; Pros US : <b>{_fmt_sync(synchros.get('Pros US'))}</b></div>",
-        unsafe_allow_html=True
-    )
+    if mobile_ui:
+        # v8 : version compacte — l'icône 🕒 remplace le libellé, noms de groupes courts
+        ph_sync.markdown(
+            f"<div style='font-size: 12px; color: gray; margin-top: -4px; margin-bottom: 6px;'>"
+            f"🕒 Portef. <b>{_fmt_sync(synchros.get('Portefeuille'))}</b>"
+            f" · CAD <b>{_fmt_sync(synchros.get('Pros CAD'))}</b>"
+            f" · US <b>{_fmt_sync(synchros.get('Pros US'))}</b></div>",
+            unsafe_allow_html=True
+        )
+    else:
+        ph_sync.markdown(
+            f"<div style='font-size: 12px; color: gray; margin-top: -4px; margin-bottom: 6px;'>"
+            f"🕒 Dernière synchro réussie — Portefeuille : <b>{_fmt_sync(synchros.get('Portefeuille'))}</b>"
+            f" &nbsp;·&nbsp; Pros CAD : <b>{_fmt_sync(synchros.get('Pros CAD'))}</b>"
+            f" &nbsp;·&nbsp; Pros US : <b>{_fmt_sync(synchros.get('Pros US'))}</b></div>",
+            unsafe_allow_html=True
+        )
 
     # Alertes (Portefeuille + Prospects) -> emplacement réservé en haut
     if afficher_alertes:
