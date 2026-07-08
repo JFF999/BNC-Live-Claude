@@ -471,6 +471,42 @@ st.title("📈 BNC LIVE v7")
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
 
+# === v7 : ORIENTATION mobile — portrait = mode mobile, paysage = mode complet ===
+# L'orientation n'est connue que du navigateur : un petit script la synchronise dans
+# l'URL (?orient=portrait|paysage) et recharge la page quand l'appareil pivote.
+# Injecté UNIQUEMENT sur téléphone (sur PC, redimensionner la fenêtre ne doit
+# surtout pas recharger la page).
+if est_mobile():
+    components.html("""
+    <script>
+    (function() {
+        function verifier() {
+            try {
+                const p = window.parent;
+                const actuel = (p.innerWidth > p.innerHeight) ? 'paysage' : 'portrait';
+                const url = new URL(p.location.href);
+                if (url.searchParams.get('orient') !== actuel) {
+                    url.searchParams.set('orient', actuel);
+                    p.location.replace(url.toString());
+                }
+            } catch (e) {}
+        }
+        verifier();
+        let t = null;
+        window.parent.addEventListener('resize', function() {
+            clearTimeout(t);
+            t = setTimeout(verifier, 400);
+        });
+    })();
+    </script>
+    """, height=0)
+
+def orientation_paysage():
+    try:
+        return st.query_params.get("orient", "") == "paysage"
+    except Exception:
+        return False
+
 # --- HAUT DE PAGE : Paramètres + Rafraîchir + Sheet sur UNE seule ligne ---
 # (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
 col_param, col_refresh, col_sheet = st.columns(3)
@@ -478,7 +514,11 @@ col_param, col_refresh, col_sheet = st.columns(3)
 # Libellés compacts sur mobile (mode connu AVANT le popover grâce à la préférence
 # persistée ; « Auto » retombe sur la détection User-Agent).
 _mode_pref = CFG_APP.get('mode_affichage', 'Auto (détection)')
-mobile_ui = est_mobile() if _mode_pref == 'Auto (détection)' else (_mode_pref == 'Mobile (essentiel)')
+if _mode_pref == 'Auto (détection)':
+    # téléphone EN PORTRAIT = mode mobile ; pivoté en PAYSAGE = affichage complet
+    mobile_ui = est_mobile() and not orientation_paysage()
+else:
+    mobile_ui = (_mode_pref == 'Mobile (essentiel)')
 
 with col_param:
     with st.popover("⚙️" if mobile_ui else "⚙️ Paramètres"):
@@ -497,7 +537,8 @@ with col_param:
         elif mode_affichage == "Ordinateur (complet)":
             mode_mobile = False
         else:
-            mode_mobile = est_mobile()
+            # Auto : téléphone en PORTRAIT = mobile ; en PAYSAGE = complet
+            mode_mobile = est_mobile() and not orientation_paysage()
 
         st.markdown("---")
         st.markdown("**Affichage des Colonnes**")
