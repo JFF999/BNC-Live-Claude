@@ -1607,12 +1607,17 @@ INTERVALLES_FETCH = {"P1": 10 * 60, "P2": 25 * 60, "P3": 35 * 60}
 def _etat_fetch_auto():
     return {"last": {}, "ver": {"P1": 0, "P2": 0, "P3": 0}}
 
-def jetons_fetch(auto_seance):
+def jetons_fetch(auto_seance, marche_us=True, marche_ca=True):
     maintenant = time.time()
     if not auto_seance:
         # Mode normal : tout le monde partage une tranche de 5 min (= ancien ttl 300).
         b = int(maintenant // 300)
         return {g: ("t", b) for g in ("P1", "P2", "P3")}
+    # === v8 : un groupe n'est rafraîchi que si SA bourse est ouverte ===
+    # P2 (Pros CAD) <-> TSX ; P3 (Pros US) <-> bourse US ; P1 (Portefeuille, mixte
+    # CAD+US) dès qu'une des deux est ouverte. Un groupe dont la bourse est fermée
+    # garde ses valeurs en cache (sa « Dernière synchro » ne bouge pas).
+    autorise = {"P1": marche_us or marche_ca, "P2": marche_ca, "P3": marche_us}
     etat = _etat_fetch_auto()
     last, ver = etat["last"], etat["ver"]
     if not last:
@@ -1622,6 +1627,8 @@ def jetons_fetch(auto_seance):
             last[g] = maintenant
     else:
         for g in ("P1", "P2", "P3"):   # priorité P1 > P2 > P3 ; UN seul par rechargement
+            if not autorise.get(g, True):
+                continue
             if maintenant - last.get(g, 0) >= INTERVALLES_FETCH[g]:
                 ver[g] += 1
                 last[g] = maintenant
@@ -1681,7 +1688,7 @@ try:
     symboles_possedes = tuple(set(df_portefeuille_actif['Symbole'].dropna().astype(str).str.strip()))
 
     # === PHASE 1 : PORTEFEUILLE (priorité 1) — récupéré et AFFICHÉ en premier ===
-    jetons = jetons_fetch(rafraichir_auto and (ouvert_us or ouvert_ca))
+    jetons = jetons_fetch(rafraichir_auto and (ouvert_us or ouvert_ca), ouvert_us, ouvert_ca)
     with st.spinner("Chargement du Portefeuille..."):
         yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True, jeton=jetons["P1"])
 
