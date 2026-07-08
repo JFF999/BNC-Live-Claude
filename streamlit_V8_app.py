@@ -583,7 +583,7 @@ with col_titre:
     )
 
 with col_param:
-    with st.popover("⚙️" if mobile_ui else "⚙️ Paramètres"):
+    with st.popover("⚙️", help="Paramètres"):
         OPTIONS_GAIN = ["Yahoo", "Affaires", "Moyenne"]
         source_gain = st.selectbox("Calcul du Gain", OPTIONS_GAIN,
                                    index=pref_index('source_gain', OPTIONS_GAIN, 2))
@@ -747,12 +747,12 @@ def url_google_sheet():
     except Exception:
         return ""
 
-if col_refresh.button(f"🔄 {heure_actuelle}" if mobile_ui else f"🔄 Rafraîchir ({heure_actuelle})"):
+if col_refresh.button("🔄", help=f"Rafraîchir (dernière heure : {heure_actuelle})"):
     st.cache_data.clear()
     st.rerun()
 url_sheet = url_google_sheet()
 if url_sheet:
-    col_sheet.link_button("📗 Sheet" if mobile_ui else "📗 Ouvrir Sheet", url_sheet)
+    col_sheet.link_button("📗", url_sheet, help="Ouvrir le Google Sheet")
 
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
