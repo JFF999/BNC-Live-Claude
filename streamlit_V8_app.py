@@ -739,13 +739,23 @@ def prochaine_ouverture():
             return ouverture
     return None
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def url_google_sheet():
-    # URL du Google Sheet (via gspread) pour le bouton « Ouvrir Sheet ».
+    # URL du Google Sheet pour le bouton « Ouvrir Sheet ».
+    # - construite depuis l'ID (Spreadsheet.url n'existe pas dans les vieux gspread) ;
+    # - un échec n'est JAMAIS mis en cache (sinon le bouton disparaît pour 1 h) :
+    #   on mémorise seulement le succès, et on réessaie à chaque rerun sinon.
+    u = st.session_state.get('url_sheet', '')
+    if u:
+        return u
     try:
-        return connecter_google_sheets().url
+        sh = connecter_google_sheets()
+        u = getattr(sh, 'url', '') or ''
+        if not u:
+            u = f"https://docs.google.com/spreadsheets/d/{sh.id}"
     except Exception:
         return ""
+    st.session_state['url_sheet'] = u
+    return u
 
 if col_refresh.button("🔄", help=f"Rafraîchir (dernière heure : {heure_actuelle})"):
     st.cache_data.clear()
