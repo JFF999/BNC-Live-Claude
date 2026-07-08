@@ -762,6 +762,20 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# === v7 : dernière synchro Yahoo RÉUSSIE par groupe (rempli après la phase 2) ===
+ph_sync = st.empty()
+
+@st.cache_resource
+def _dernieres_synchros():
+    # Survit aux rechargements de page ; un blocage Yahoo n'écrase pas la dernière réussite.
+    return {}
+
+def _fmt_sync(h):
+    if not h:
+        return "—"
+    auj = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
+    return h[len(auj) + 1:] if h.startswith(auj + " ") else h   # aujourd'hui -> HH:MM seul
+
 # --- MOTEUR TURBO ---
 # === V4 : récupération Yahoo refondue ===========================================
 # Avant : 1 appel .history() + 1 appel .info PAR symbole, 10 threads en parallèle.
@@ -850,6 +864,9 @@ def telecharger_yahoo(groupes, retry_premier=False, jeton=None):
             niveaux_ok.append(niveau)
 
     resultats['__statut__'] = {'niveaux_ok': niveaux_ok, 'bloque': bloque}
+    # Horodatage du TÉLÉCHARGEMENT réel : voyage avec le cache (un cache hit renvoie
+    # l'heure de la récupération d'origine, pas celle du rechargement de page).
+    resultats['__horodatage__'] = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d %H:%M")
     return resultats
 
 # === V4 : plus de @st.cache_data ici =============================================
@@ -1787,8 +1804,8 @@ try:
     with st.spinner("Chargement des Prospects (CAD puis US)..."):
         yahoo_p2 = telecharger_yahoo((g2,), jeton=jetons["P2"])
         yahoo_p3 = telecharger_yahoo((g3,), jeton=jetons["P3"])
-    yahoo_p23 = {**{k: v for k, v in yahoo_p2.items() if k != '__statut__'},
-                 **{k: v for k, v in yahoo_p3.items() if k != '__statut__'}}
+    yahoo_p23 = {**{k: v for k, v in yahoo_p2.items() if not k.startswith('__')},
+                 **{k: v for k, v in yahoo_p3.items() if not k.startswith('__')}}
     yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
 
     df_live_prospects = construire_donnees(df_base_prospects, yahoo_data, est_portefeuille=False, symboles_portefeuille=symboles_possedes, plafond_scaling=plafond_preg)
@@ -1810,6 +1827,23 @@ try:
     # dans chaque appel mono-groupe, niveaux_ok == [1] signifie « son groupe est passé »)
     stat2 = yahoo_p2.get('__statut__', {})
     stat3 = yahoo_p3.get('__statut__', {})
+
+    # === v7 : mémorise et affiche la dernière synchro RÉUSSIE par groupe ===
+    synchros = _dernieres_synchros()
+    if 1 in yahoo_p1.get('__statut__', {}).get('niveaux_ok', []):
+        synchros['Portefeuille'] = yahoo_p1.get('__horodatage__', '')
+    if 1 in stat2.get('niveaux_ok', []):
+        synchros['Pros CAD'] = yahoo_p2.get('__horodatage__', '')
+    if 1 in stat3.get('niveaux_ok', []):
+        synchros['Pros US'] = yahoo_p3.get('__horodatage__', '')
+    ph_sync.markdown(
+        f"<div style='font-size: 12px; color: gray; margin-top: -4px; margin-bottom: 6px;'>"
+        f"🕒 Dernière synchro réussie — Portefeuille : <b>{_fmt_sync(synchros.get('Portefeuille'))}</b>"
+        f" &nbsp;·&nbsp; Pros CAD : <b>{_fmt_sync(synchros.get('Pros CAD'))}</b>"
+        f" &nbsp;·&nbsp; Pros US : <b>{_fmt_sync(synchros.get('Pros US'))}</b></div>",
+        unsafe_allow_html=True
+    )
+
     statut = {
         'bloque': bool(stat2.get('bloque')) or bool(stat3.get('bloque')),
         'niveaux_ok': ([1] if 1 in stat2.get('niveaux_ok', []) else [])
