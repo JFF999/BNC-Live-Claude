@@ -70,6 +70,14 @@ def base_symbole(s):
     return s
 
 
+def cle_symbole(s):
+    """Clé de correspondance UNIFIÉE : suffixe canadien retiré + point de classe
+    d'action normalisé en tiret. Ainsi « BBD.B » (notation Les Affaires),
+    « BBD-B » et « BBD-B.TO » (notation Yahoo) donnent tous « BBD-B », et la
+    map garde la plus récente des trois."""
+    return base_symbole(str(s).strip().upper()).replace('.', '-')
+
+
 def trouver(entetes, nom):
     cible = ' '.join(nom.split())
     for i, h in enumerate(entetes):
@@ -110,10 +118,12 @@ def main():
         date = str(row[SRC_COL_DATE]).strip()
         if cible is None:
             continue
-        # Un meme symbole peut apparaitre plusieurs fois : on garde la PLUS RECENTE.
-        ancien = affaires.get(sym)
+        # Cle UNIFIEE (exact/base/notation de classe confondus) : un meme titre peut
+        # apparaitre sous plusieurs notations et plusieurs dates -> on garde la PLUS RECENTE.
+        cle = cle_symbole(sym)
+        ancien = affaires.get(cle)
         if ancien is None or date_key(date) >= date_key(ancien[0]):
-            affaires[sym] = (date, cible)
+            affaires[cle] = (date, cible)
     journal(f"{len(affaires)} objectifs lus depuis « {NOM_SOURCE} ».")
 
     # 2) Écrire dans chaque onglet de la destination
@@ -145,11 +155,9 @@ def main():
             sym = str(row[i_sym]).strip().upper()
             if not sym or sym == '0':
                 continue
-            # Le symbole du Sheet (ex. MDA.TO) peut exister sous forme exacte ET base
-            # (ex. MDA) dans la source, avec des dates differentes -> on prend la PLUS RECENTE.
-            candidats = [affaires.get(sym), affaires.get(base_symbole(sym))]
-            candidats = [c for c in candidats if c]
-            entree = max(candidats, key=lambda c: date_key(c[0])) if candidats else None
+            # Correspondance par cle unifiee : exact, base et notations de classe
+            # (BBD.B / BBD-B.TO) se rejoignent, la map contient deja la plus recente.
+            entree = affaires.get(cle_symbole(sym))
             pa_actuel = str(row[i_pa]).strip() if len(row) > i_pa else ""
             maj_actuel = str(row[i_maj]).strip() if (i_maj is not None and len(row) > i_maj) else ""
             if entree:
