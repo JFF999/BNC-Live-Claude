@@ -1540,6 +1540,12 @@ def config_largeur_pourquoi(df, largeur_max=1100):
     except Exception:
         return {"Pourquoi": st.column_config.TextColumn("Pourquoi", width="large")}
 
+def hauteur_tableau(nb_lignes, max_lignes=18):
+    # Hauteur plafonnée à max_lignes visibles : au-delà, le tableau défile à
+    # l'interne et sa ligne d'en-tête reste figée (comportement natif de
+    # st.dataframe). En deçà, la hauteur épouse le contenu comme avant.
+    return (min(nb_lignes, max_lignes) * 35) + 43
+
 def config_colonnes_communes():
     # Configuration d'affichage partagée par tous les tableaux (idée reprise de Codex).
     cfg = {
@@ -1891,7 +1897,7 @@ try:
 
         st.dataframe(
             styled_port,
-            use_container_width=False, hide_index=True, height=(len(df_live) * 35) + 43,
+            use_container_width=False, hide_index=True, height=hauteur_tableau(len(df_live)),
             column_order=colonnes_a_afficher,
             column_config={**config_description, **config_colonnes_communes()}
         )
@@ -2198,7 +2204,7 @@ try:
 
         st.dataframe(
             styled_cad,
-            use_container_width=False, hide_index=True, height=(len(df_prospects_cad) * 35) + 43,
+            use_container_width=False, hide_index=True, height=hauteur_tableau(len(df_prospects_cad)),
             column_order=colonnes_a_afficher_pros,
             column_config={**config_description, **config_colonnes_communes(),
                            **config_largeur_pourquoi(df_prospects_cad)}
@@ -2258,7 +2264,7 @@ try:
 
         st.dataframe(
             styled_usd,
-            use_container_width=False, hide_index=True, height=(len(df_prospects_usd) * 35) + 43,
+            use_container_width=False, hide_index=True, height=hauteur_tableau(len(df_prospects_usd)),
             column_order=colonnes_a_afficher_pros_us,
             column_config={**config_description, **config_colonnes_communes(),
                            **config_largeur_pourquoi(df_prospects_usd)}
