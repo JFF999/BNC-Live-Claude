@@ -101,7 +101,7 @@ st.markdown("""
                (sinon la 2e ligne — TSX — touche la 1re). */
             div.market-block { font-size: 13px; line-height: 1.5; }
             div[data-testid="stHorizontalBlock"]:has(div.market-block) {
-                flex-wrap: wrap !important; row-gap: 8px !important;
+                flex-wrap: wrap !important; row-gap: 14px !important;
             }
 
             /* Cartes de stats (Gain total / Gain du jour / Valeur totale) un cran
