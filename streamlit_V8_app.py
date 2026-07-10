@@ -97,11 +97,20 @@ st.markdown("""
             div[data-testid="stDataFrame"] { zoom: 0.78; }
 
             /* Bandeau des marchés : même police que les autres lignes d'entête,
-               et passage sur 2 lignes si trop long (au lieu d'être coupé). */
-            div.market-block { font-size: 13px; }
+               passage sur 2 lignes si trop long, avec un espacement vertical net
+               (sinon la 2e ligne — TSX — touche la 1re). */
+            div.market-block { font-size: 13px; line-height: 1.5; }
             div[data-testid="stHorizontalBlock"]:has(div.market-block) {
-                flex-wrap: wrap !important; row-gap: 2px !important;
+                flex-wrap: wrap !important; row-gap: 8px !important;
             }
+
+            /* Cartes de stats (Gain total / Gain du jour / Valeur totale) un cran
+               plus petites pour que les TROIS tiennent dans la largeur de l'écran.
+               (!important : les tailles sont posées en style inline par le markdown) */
+            div[data-testid="stHorizontalBlock"]:has(div.stats-block) { gap: 8px !important; }
+            div.stats-block { padding: 4px 8px 5px 8px !important; }
+            div.stats-block p:first-child { font-size: 11px !important; }
+            div.stats-block p:nth-child(2) { font-size: 13px !important; }
         }
 
         /* === v7 : sur MOBILE, garder Score min / Risque max côte à côte (Streamlit
