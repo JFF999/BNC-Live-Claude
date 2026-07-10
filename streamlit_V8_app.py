@@ -600,7 +600,7 @@ ICONE_LA_B64 = ("iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAFFElEQVR42p2WX2x
 # affaires » (routine claude.ai). Un site web ne peut pas cliquer « Run now » à ta
 # place : le bouton ouvre la PAGE DE LA TÂCHE dans un nouvel onglet — un seul clic
 # sur Run now lance la surveillance.
-URL_COWORK_AFF = "https://claude.ai/scheduled-task/surveiller-les-affaires"
+URL_COWORK_AFF = "https://claude.ai/"   # TODO: URL exacte de la tâche (voir barre d'adresse)
 
 # --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet + Affaires + LesAffaires.com ---
 # (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
