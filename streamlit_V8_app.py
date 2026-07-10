@@ -571,9 +571,12 @@ if _mode_pref == 'Auto (détection)':
 else:
     mobile_ui = (_mode_pref == 'Mobile (essentiel)')
 
-# --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet + Affaires, UNE ligne ---
+# Favicon Les Affaires (24x24 PNG, intégré en base64 -> aucun chargement externe)
+ICONE_LA_B64 = ("iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAFFElEQVR42p2WX2xcVxHGfzPn7HW89jppQiyHJP0nh7QxEYhYDZCAHQqtIiSQCmtaNVIEFfCCKKIUFaEqqgQUaEEu4gFVAgkJULUWVRtS9R9lbaUWNKRVnYQG5QGaqnYIdu3YsTe7e+85w8N603WgCeq8XOnee76Z851vvjlwmTCQEkVXBn/ptzJ4o+gMhHcTJXArXuQ8RycP5o9OHsyT85f/tyXkncCHIBww01v6d+710+c/E6vZh7CwvrHITUvevxLXX/XUM38dP/SASDRQgXjFBCVwQyJhrH/3rR3/nPqeX0z7kzRSj5FoDeIUaHNKPeeod+aOXujdcP/Hj4w/cyCaPnBJErmEcycq4XDv9vs635x70FUiVZFgllkkUyEHooAhRgRkFeasI8fSlg0P7Tpx9NulLLghCE1Mba1chFC+ru87607PPphVQliiFuq24KyQ88n2rUohr2qZSmOdR3BVkVBfqoe1f5+89/C2HT8cUgklim7FDpqcv3jTx27pPH762exCyFIqbtWe3bLxvq+z6vpryV93LSc/+XkWR0dxroCFeBHBBHMxhlw+8Yvvv+bW3UcOP9fEVECKEEsnSom8PjmsF1IyRbzmpXr8GNrVSaG3F+c8IoI16RQQ5xB1KCrmE9FqhNcnh0snSkmxcRai5YEBJ2Cb73rk5s6F7MYKRInmTD1xZopzTzwN0TCzBvcAoqgZaZijHmZJ4zxp9pZbjAuxsBBu3PzVR24WsPLAgPOMjYEITM/f5uuZCRIRFCJIgiZJQ4AturCsTvDGmjtuZ/XeT9DW00M6Ncn0Y09GPVQWzi7ehsrTjI2heyCzGL2EOFCPJiZogweB5aovHpYIRiB2d9L73GP0/mKYs7/+LZokbLhzH9v+MKK68wMS5+YHLES/BzIF+BtonFvyLaJaod3mQ9SRcZ51X7qd9XsGmX3+BRaefYozP/45FgIeKHx4J+GtGd9U6Ns9ry1o7+RNMeJZxfmDf+J0dw///tmjODyuey3iGsoUt7LTPEAfxJdWd2Scm0VwIPa/PcUiSp7aa8eYOnCa7rv2kfR9Ewp5LATEOcwM7erMWM6jZfDiNMP50UTVMFvR6iYtTC1TtHrfEDveOMb6r+znzE9/wtzvft/cQWzzzqyelSXJZWXwOlgsGtGI3V2Pp4kXw/Rts27UYTFiMUI9IL6Dq79/P8matcw8cYiFk8cbIrNGCakXqaSVx8kCgxTNy8hINJCX/zz8wlLPF14rVLNtFQiKOLNIcs1GRBUBZNM6YpYSaykAV99zN+19Wwj1SBQJClrf2vvqr0Llj2YmIhIVsBHQfulPZcumu2Pe400sDRVr/+gukhuuZ/7YBPPHJ+j63F78hh7+8eVvMD8xQTozjW/rZOpHw3bm0V9Smzojm/bv/9pIw+y0heGmTRPKvX3f6n5j/qHFWhqtq8Mspi7W6w2bbu9AqobV5rAkj+vIU5v7V0jw0u68zn1k+3cHXxz9QdOH/suuS+CGVMLolu33dL05/7BfqlJBo6DRWO5uAOeRECJEzeM1K3gWNq29d+DkKw+XikU3NDJy0a5XjLoRsJLhPj17dnzfTR8cl1r1fW2RzXlDxUwUxIMkZpJ3qrR7qV2VvHR+68YvDk4c+c2l4FccmZjJX3bt+pRMnfusVbMdFrP3EMFUZ1w+edm9d82T/ePjzyNirbS866F/yk61nbJTbXj3fw/9K0XrtWWFpZbBL0+uy15b/gNnp1KI5ff4ngAAAABJRU5ErkJggg==")
+
+# --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet + Affaires + LesAffaires.com ---
 # (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
-col_titre, col_param, col_refresh, col_sheet, col_aff = st.columns(5)
+col_titre, col_param, col_refresh, col_sheet, col_aff, col_la = st.columns(6)
 with col_titre:
     # Sur mobile : « 📈 » seul, sinon la rangée déborde et le bouton Sheet est coupé.
     st.markdown(
@@ -826,6 +829,20 @@ if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Pr
         st.rerun()
     except Exception as e:
         st.error(f"Import Les Affaires : {type(e).__name__} - {e}")
+with col_la:
+    # Lien vers la page « À surveiller » de LesAffaires.com, avec leur icône,
+    # habillé pour ressembler aux autres boutons de la rangée.
+    st.markdown(
+        f"<a href='https://www.lesaffaires.com/bourse/a-surveiller/' target='_blank' "
+        f"title='Les Affaires — titres à surveiller' "
+        f"style='display: inline-flex; align-items: center; justify-content: center; "
+        f"height: 38px; min-width: 46px; padding: 0 4px; "
+        f"border: 1px solid rgba(250, 250, 250, .2); border-radius: 8px; "
+        f"text-decoration: none;'>"
+        f"<img src='data:image/png;base64,{ICONE_LA_B64}' width='20' height='20' "
+        f"style='border-radius: 3px; display: block;'/></a>",
+        unsafe_allow_html=True
+    )
 
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
