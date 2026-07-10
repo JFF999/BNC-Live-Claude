@@ -1,13 +1,18 @@
 """
 Met à jour les données « Les Affaires » dans le Google Sheet Action_2026-c_New,
-à partir de la feuille Surperformance_LesAffaires.
+à partir de l'onglet « LesAffaires » DU MÊME classeur (avant : fichier séparé
+Surperformance_LesAffaires).
 
-Source (Surperformance_LesAffaires, onglet Feuil1) :
+Source (Action_2026-c_New, onglet LesAffaires) :
     col A = Date (-> MAJ Aff)   |   col C = Symbole   |   col D = Cours cible (-> Pré Aff)
 
-Destination (Action_2026-c_New), onglets « Portefeuille BNC » et « Prospects » :
-    écrit « Pré Aff » et « MAJ Aff », appariés par SYMBOLE (exact, sinon base sans suffixe
-    .TO/.V/.NE/.CN — ex. Surperformance « BCE » -> portefeuille « BCE.TO »).
+Destination (Action_2026-c_New), onglet « Prospects » :
+    écrit « Pré Aff » et « MAJ Aff », appariés par clé de symbole unifiée
+    (suffixe .TO/.V/.NE/.CN retiré + point de classe -> tiret ; ex. « BBD.B »,
+    « BBD-B » et « BBD-B.TO » se rejoignent ; la cible la plus RÉCENTE gagne).
+
+NB : la même synchro est disponible via le bouton 📰 de l'app (streamlit_V8_app.py),
+qui importe les helpers de ce module.
 
 À LANCER EN LOCAL avec le Python pythoncore (voir sync_excel_vers_gsheet.py pour les pré-requis).
 """
@@ -23,13 +28,13 @@ import gspread
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
 from chemins_bnc import dossier_actions   # Windows FR (« Mon Drive ») ou EN (« My Drive »)
 CHEMIN_LOG = os.path.join(dossier_actions(), "bnc_sync_log.txt")
-NOM_SOURCE = "Surperformance_LesAffaires"
 NOM_DEST = "Action_2026-c_New"
+ONGLET_SOURCE = "LesAffaires"    # onglet source, dans le MÊME classeur
 
 SRC_COL_DATE = 0      # A
 SRC_COL_SYMBOLE = 2   # C
 SRC_COL_CIBLE = 3     # D
-FEUILLES_DEST = ["Portefeuille BNC", "Prospects"]
+FEUILLES_DEST = ["Prospects"]
 SUFFIXES_CAD = ('.TO', '.V', '.NE', '.CN')
 # ===============================================================
 
@@ -103,9 +108,10 @@ def main():
         return
 
     gc = gspread.service_account(filename=CHEMIN_CRED)
+    dest_classeur = gc.open(NOM_DEST)
 
-    # 1) Lire la source : map SYMBOLE -> (date, cible)
-    src = gc.open(NOM_SOURCE).sheet1
+    # 1) Lire la source : map SYMBOLE -> (date, cible), onglet du même classeur
+    src = dest_classeur.worksheet(ONGLET_SOURCE)
     lignes = src.get_all_values()
     affaires = {}
     for row in lignes[1:]:
@@ -124,10 +130,10 @@ def main():
         ancien = affaires.get(cle)
         if ancien is None or date_key(date) >= date_key(ancien[0]):
             affaires[cle] = (date, cible)
-    journal(f"{len(affaires)} objectifs lus depuis « {NOM_SOURCE} ».")
+    journal(f"{len(affaires)} objectifs lus depuis l'onglet « {ONGLET_SOURCE} ».")
 
     # 2) Écrire dans chaque onglet de la destination
-    dest = gc.open(NOM_DEST)
+    dest = dest_classeur
     for nom_feuille in FEUILLES_DEST:
         try:
             ws = dest.worksheet(nom_feuille)

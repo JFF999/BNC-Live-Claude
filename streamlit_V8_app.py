@@ -571,9 +571,9 @@ if _mode_pref == 'Auto (détection)':
 else:
     mobile_ui = (_mode_pref == 'Mobile (essentiel)')
 
-# --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet sur UNE seule ligne ---
+# --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet + Affaires, UNE ligne ---
 # (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
-col_titre, col_param, col_refresh, col_sheet = st.columns(4)
+col_titre, col_param, col_refresh, col_sheet, col_aff = st.columns(5)
 with col_titre:
     # Sur mobile : « 📈 » seul, sinon la rangée déborde et le bouton Sheet est coupé.
     st.markdown(
@@ -739,6 +739,60 @@ def prochaine_ouverture():
             return ouverture
     return None
 
+def synchroniser_affaires():
+    """v8 : bouton 📰 — copie Pré Aff / MAJ Aff depuis l'onglet « LesAffaires » vers
+    l'onglet « Prospects » du MÊME classeur. Réutilise les helpers du script local
+    (clé de symbole unifiée BBD.B/BBD-B.TO, la cible la plus récente gagne).
+    Renvoie (nb mis à jour, nb vidés)."""
+    from sync_affaires_vers_gsheet import parse_nombre, cle_symbole, date_key
+
+    sh = connecter_google_sheets()
+    src = sh.worksheet("LesAffaires").get_all_values()
+    affaires = {}
+    for row in src[1:]:
+        if len(row) <= 3:
+            continue
+        sym = str(row[2]).strip().upper()          # C = Symbole
+        if not sym:
+            continue
+        cible = parse_nombre(row[3])               # D = Cours cible
+        date = str(row[0]).strip()                 # A = Date
+        if cible is None:
+            continue
+        cle = cle_symbole(sym)
+        ancien = affaires.get(cle)
+        if ancien is None or date_key(date) >= date_key(ancien[0]):
+            affaires[cle] = (date, cible)
+
+    ws = sh.worksheet("Prospects")
+    vals = ws.get_all_values()
+    ent = [' '.join(str(h).split()) for h in vals[0]]
+    i_sym, i_pa, i_maj = ent.index("Symbole"), ent.index("Pré Aff"), ent.index("MAJ Aff")
+
+    updates, n_maj, n_vides = [], 0, 0
+    for r, row in enumerate(vals[1:], start=2):
+        if len(row) <= i_sym:
+            continue
+        sym = str(row[i_sym]).strip().upper()
+        if not sym or sym == '0':
+            continue
+        entree = affaires.get(cle_symbole(sym))
+        if entree:
+            date, cible = entree
+            updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [[cible]]})
+            updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [[date]]})
+            n_maj += 1
+        else:
+            # symbole absent de LesAffaires : on vide une éventuelle vieille valeur
+            pa_actuel = str(row[i_pa]).strip() if len(row) > i_pa else ''
+            if pa_actuel:
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [['']]})
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [['']]})
+                n_vides += 1
+    if updates:
+        ws.batch_update(updates, value_input_option='USER_ENTERED')
+    return n_maj, n_vides
+
 def url_google_sheet():
     # URL du Google Sheet pour le bouton « Ouvrir Sheet ».
     # - construite depuis l'ID (Spreadsheet.url n'existe pas dans les vieux gspread) ;
@@ -763,6 +817,15 @@ if col_refresh.button("🔄", help=f"Rafraîchir (dernière heure : {heure_actue
 url_sheet = url_google_sheet()
 if url_sheet:
     col_sheet.link_button("📗", url_sheet, help="Ouvrir le Google Sheet")
+if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Prospects)"):
+    try:
+        with st.spinner("Import Les Affaires..."):
+            n_maj, n_vides = synchroniser_affaires()
+        st.toast(f"📰 Les Affaires : {n_maj} mis à jour, {n_vides} vidé(s).", icon="✅")
+        st.cache_data.clear()   # recharge les Pré Aff fraîches
+        st.rerun()
+    except Exception as e:
+        st.error(f"Import Les Affaires : {type(e).__name__} - {e}")
 
 # Indicateur d'état des bourses (sous la rangée Paramètres / boutons)
 ouvert_us, ouvert_ca = statut_bourses()
