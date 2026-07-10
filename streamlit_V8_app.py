@@ -95,6 +95,13 @@ st.markdown("""
            colonnes du Portefeuille tiennent à l'écran ; même taille pour les Prospects. */
         @media (max-width: 640px) {
             div[data-testid="stDataFrame"] { zoom: 0.78; }
+
+            /* Bandeau des marchés : même police que les autres lignes d'entête,
+               et passage sur 2 lignes si trop long (au lieu d'être coupé). */
+            div.market-block { font-size: 13px; }
+            div[data-testid="stHorizontalBlock"]:has(div.market-block) {
+                flex-wrap: wrap !important; row-gap: 2px !important;
+            }
         }
 
         /* === v7 : sur MOBILE, garder Score min / Risque max côte à côte (Streamlit
@@ -1895,7 +1902,7 @@ try:
         ESSENTIEL_PROS = {"Symbole", "Signal Aff", "Achat Rang", "Prix $", "Pré G %", "Pré Aff Display"}
         colonnes_base_port = [c for c in colonnes_base_port if c in ESSENTIEL_PORT]
         colonnes_base_pros = [c for c in colonnes_base_pros if c in ESSENTIEL_PROS]
-        st.caption("📱 Mode mobile")
+        # (l'indicateur 📱 est intégré au début de la ligne des heures de synchro)
 
     tab1, tab_dec, tab2, tab3, tab4 = st.tabs(["💰 Portefeuille", "🧭 Décision", "🎯 Pros CAD", "🎯 Pros US", "📘 Méthode"])
 
@@ -2030,10 +2037,10 @@ try:
     if 1 in stat3.get('niveaux_ok', []):
         synchros['Pros US'] = yahoo_p3.get('__horodatage__', '')
     if mobile_ui:
-        # v8 : version compacte — l'icône 🕒 remplace le libellé, noms de groupes courts
+        # v8 : version compacte — 📱 (mode mobile) ouvre la ligne des heures de synchro
         ph_sync.markdown(
             f"<div style='font-size: 12px; color: gray; margin-top: -4px; margin-bottom: 6px;'>"
-            f"🕒 Portef. <b>{_fmt_sync(synchros.get('Portefeuille'))}</b>"
+            f"📱 Portef. <b>{_fmt_sync(synchros.get('Portefeuille'))}</b>"
             f" · CAD <b>{_fmt_sync(synchros.get('Pros CAD'))}</b>"
             f" · US <b>{_fmt_sync(synchros.get('Pros US'))}</b></div>",
             unsafe_allow_html=True
