@@ -14,7 +14,9 @@ Destination (Action_2026-c_New), onglet « Prospects » :
 NB : la même synchro est disponible via le bouton 📰 de l'app (streamlit_V8_app.py),
 qui importe les helpers de ce module.
 
-À LANCER EN LOCAL avec le Python pythoncore (voir sync_excel_vers_gsheet.py pour les pré-requis).
+À LANCER EN LOCAL avec le Python pythoncore. Pré-requis (une fois) :
+    python -m pip install gspread
+    + le JSON du compte de service dans C:\\Users\\jfilt\\bnc_secrets\\compte_service.json
 """
 
 import os
