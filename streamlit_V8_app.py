@@ -91,6 +91,12 @@ st.markdown("""
         .ct-sig  { font-size: 12px; }
         .ct-pq   { font-size: 11px; color: gray; margin-top: 4px; line-height: 1.35; }
 
+        /* === v8 : sur MOBILE, police des tableaux réduite (zoom) pour que TOUTES les
+           colonnes du Portefeuille tiennent à l'écran ; même taille pour les Prospects. */
+        @media (max-width: 640px) {
+            div[data-testid="stDataFrame"] { zoom: 0.78; }
+        }
+
         /* === v7 : sur MOBILE, garder Score min / Risque max côte à côte (Streamlit
            empile les colonnes sur écran étroit). Les Signaux passent en pleine largeur. */
         @media (max-width: 640px) {
@@ -1669,6 +1675,8 @@ def config_colonnes_communes():
     if globals().get('mode_mobile'):
         try:
             cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width=45)
+            # Avec le zoom mobile (0.78), il y a la place d'afficher le signal en entier.
+            cfg["Signal Aff"] = st.column_config.TextColumn("Signal", width=118)
         except Exception:
             cfg["Achat Rang"] = st.column_config.NumberColumn("🏆", format="%.0f", width="small")
     else:
