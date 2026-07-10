@@ -601,7 +601,7 @@ ICONE_LA_B64 = ("iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAFFElEQVR42p2WX2x
 # place : le bouton ouvre la page des tâches Claude dans un nouvel onglet, où un seul
 # clic sur Run now lance la surveillance. (Remplacer par l'URL EXACTE de la tâche si
 # la barre d'adresse en montre une plus précise quand la tâche est ouverte.)
-URL_COWORK_AFF = "https://claude.ai/tasks"
+URL_COWORK_AFF = "https://claude.ai/"
 
 # --- HAUT DE PAGE : Titre + Paramètres + Rafraîchir + Sheet + Affaires + LesAffaires.com ---
 # (le CSS du bloc contenant stPopover force la rangée horizontale, même sur mobile)
