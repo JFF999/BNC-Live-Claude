@@ -21,10 +21,33 @@ qui importe les helpers de ce module.
 
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import gspread
+
+JOURS_RETENTION_SOURCE = 365   # purge des entrées LesAffaires plus vieilles que ça
+
+
+def purger_source(ws, jours=JOURS_RETENTION_SOURCE):
+    """Retire de l'onglet source les entrées plus vieilles que `jours` (elles seraient
+    de toute façon périmées pour le calcul). Les lignes à date illisible sont gardées.
+    Écrit d'abord, réduit ensuite (jamais de clear avant écriture). Renvoie le nb purgé."""
+    vals = ws.get_all_values()
+    if len(vals) < 2:
+        return 0
+    limite = (datetime.now() - timedelta(days=jours)).strftime("%Y-%m-%d")
+    garde = []
+    for r in vals[1:]:
+        d = str(r[0]).strip()[:10] if r else ""
+        if not d or not d[:4].isdigit() or d >= limite:
+            garde.append(r)
+    n_sup = (len(vals) - 1) - len(garde)
+    if n_sup > 0:
+        lignes = [vals[0]] + garde
+        ws.update(lignes, value_input_option="USER_ENTERED")
+        ws.resize(rows=max(len(lignes), 2))
+    return n_sup
 
 # ======================== CONFIGURATION ========================
 CHEMIN_CRED = r"C:\Users\jfilt\bnc_secrets\compte_service.json"
@@ -114,6 +137,9 @@ def main():
 
     # 1) Lire la source : map SYMBOLE -> (date, cible), onglet du même classeur
     src = dest_classeur.worksheet(ONGLET_SOURCE)
+    n_purge = purger_source(src)
+    if n_purge:
+        journal(f"{n_purge} entrée(s) de plus de {JOURS_RETENTION_SOURCE} j purgée(s) de « {ONGLET_SOURCE} ».")
     lignes = src.get_all_values()
     affaires = {}
     for row in lignes[1:]:

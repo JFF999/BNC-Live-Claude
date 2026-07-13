@@ -226,7 +226,8 @@ def charger_donnees_base(nom_feuille):
     # --- LE NETTOYEUR DE NOMBRES FLOTTANTS ---
     colonnes_flottantes = [
         'Prix $', 'Achat $', 'Pré YF', 'Pré Aff',
-        'Var %', 'Gain %', 'Gain $', 'Pré G %'
+        'Var %', 'Gain %', 'Gain $', 'Pré G %',
+        'Prix GF',   # v8 : prix GOOGLEFINANCE (secours quand Yahoo ne fournit rien)
     ]
 
     for col in colonnes_flottantes:
@@ -386,6 +387,16 @@ def journaliser_signaux(df_port, df_pros, valeur_port=None, indices=None):
             ws = sh.add_worksheet("Journal", rows=4000, cols=len(ENTETE_JOURNAL))
             ws.append_row(ENTETE_JOURNAL)
         vals = ws.get_all_values()
+
+        # === v8 : purge des entrées de plus de 12 mois (~40 lignes/jour sinon) ===
+        limite = (datetime.now(ZoneInfo("America/Toronto")) - timedelta(days=365)).strftime("%Y-%m-%d")
+        if any(r and r[0] and r[0][:4].isdigit() and r[0][:10] < limite for r in vals[1:]):
+            garde = [vals[0]] + [r for r in vals[1:]
+                                 if not (r and r[0] and r[0][:4].isdigit() and r[0][:10] < limite)]
+            ws.update(garde, value_input_option="USER_ENTERED")   # écrase depuis A1
+            ws.resize(rows=max(len(garde) + 100, 200))            # coupe le surplus
+            vals = garde
+
         aujourdhui = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
         if any(r and r[0] == aujourdhui for r in vals[1:]):
             return vals, False   # déjà journalisé aujourd'hui
@@ -502,7 +513,9 @@ def appliquer_cache_yf(df, cache):
             continue
         for col in CHAMPS_NUM_CACHE:
             if col in df.columns and pd.isna(row.get(col)):
-                v = pd.to_numeric(pd.Series([c.get(col)]), errors='coerce').iloc[0]
+                # le Sheet renvoie les nombres au format FR (« 17,72 ») -> virgule tolérée
+                brut = str(c.get(col) or '').replace(chr(0xa0), '').replace(' ', '').replace(',', '.')
+                v = pd.to_numeric(pd.Series([brut]), errors='coerce').iloc[0]
                 if pd.notna(v):
                     df.at[idx, col] = float(v)
         if 'Secteur' in df.columns and not str(row.get('Secteur') or '').strip():
@@ -530,18 +543,48 @@ def sauvegarder_cache_yf(df_port, df_pros):
                 vus.add(sym)
                 def n(col):
                     v = pd.to_numeric(pd.Series([r.get(col)]), errors='coerce').iloc[0]
-                    return "" if pd.isna(v) else round(float(v), 4)
+                    # inf/-inf (ex. croissance Yahoo aberrante) : non serialisable JSON
+                    if pd.isna(v) or not math.isfinite(float(v)):
+                        return ""
+                    return round(float(v), 4)
                 lignes.append([sym, str(r.get('Devise') or ''),
                                "1" if bool(r.get('Possede')) else "0",
                                n('Achat Rang'), n('Chaleur 52s'), n('Div %'),
                                n('Volatilité 1m'), n('Nb Analystes'),
                                str(r.get('Secteur') or ''), n('P/E'),
                                n('Croiss Rev %'), n('Marge %'), maj])
-        ws.clear()
+        # ÉCRIRE d'abord, RÉDUIRE ensuite : un clear() suivi d'un update qui échoue
+        # laissait l'onglet VIDE (c'est arrivé) et cassait le secours anti-blocage
+        # Yahoo + l'alerte Top 5. En écrasant depuis A1 puis en coupant le surplus,
+        # un échec d'écriture laisse simplement les anciennes données en place.
+        if ws.row_count < len(lignes):
+            ws.resize(rows=len(lignes) + 50)
         ws.update(lignes)
-        return True
+        if ws.row_count > len(lignes):
+            ws.resize(rows=max(len(lignes), 2))
+        return None   # succès
+    except Exception as e:
+        return f"{type(e).__name__} - {e}"
+
+# === v8 : historique des transactions (onglet AchatVente) -> gains RÉALISÉS ========
+@st.cache_data(ttl=300)
+def charger_achat_vente():
+    try:
+        sh = connecter_google_sheets()
+        ws = sh.worksheet("AchatVente")
+        vals = ws.get_all_values()
     except Exception:
-        return False
+        return pd.DataFrame()
+    if len(vals) < 2:
+        return pd.DataFrame()
+    ent = [' '.join(str(h).split()) for h in vals[0]]   # aplatit les retours de ligne
+    lignes = []
+    for r in vals[1:]:
+        if not any(str(c).strip() for c in r):
+            continue
+        r = list(r[:len(ent)]) + [""] * (len(ent) - len(r))
+        lignes.append(r)
+    return pd.DataFrame(lignes, columns=ent)
 
 # --- TITRE (v8 : compact, sur la même ligne que les boutons) ---
 heure_actuelle = heure_mise_a_jour()
@@ -1104,6 +1147,22 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                     df.at[index, 'Gain Jour $'] = (prix_actuel - prix_veille) * qte
             else:
                 tendances.append(None)
+
+            # === v8 : prix de SECOURS Google Finance (colonne « Prix GF » du Sheet,
+            # formule GOOGLEFINANCE sans limite de requêtes). Utilisé UNIQUEMENT quand
+            # Yahoo n'a rien fourni : le prix (et le Gain du portefeuille) restent
+            # calculables ; Var % / Tendance / volatilité restent vides.
+            if prix_actuel is None:
+                gf = pd.to_numeric(pd.Series([row.get('Prix GF')]), errors='coerce').iloc[0]
+                if pd.notna(gf) and float(gf) > 0:
+                    prix_actuel = float(gf)
+                    df.at[index, 'Prix $'] = prix_actuel
+                    df.at[index, 'Données OK'] = True
+                    if est_portefeuille and 'Achat $' in row and pd.notna(row['Achat $']) and str(row['Achat $']).strip() != "":
+                        achat = float(row['Achat $'])
+                        qte = float(row['Qtée']) if 'Qtée' in row and pd.notna(row['Qtée']) and str(row['Qtée']).strip() != "" else 0
+                        df.at[index, 'Gain %'] = (prix_actuel - achat) / achat
+                        df.at[index, 'Gain $'] = (prix_actuel - achat) * qte
 
             prevision_1an = infos_gen.get('targetMeanPrice')
             if prevision_1an is not None:
@@ -2114,7 +2173,12 @@ try:
     # === v7 : sauvegarde du cache YF (1 fois par rafraîchissement) ===
     sig_cache = signature_donnees(("CACHE",) + g1 + g2 + g3)
     if st.session_state.get('sig_cache_yf') != sig_cache:
-        sauvegarder_cache_yf(df_live, df_live_prospects)
+        erreur_cache = sauvegarder_cache_yf(df_live, df_live_prospects)
+        if erreur_cache:
+            print(f"[CACHE_YF] echec : {erreur_cache}", flush=True)   # visible dans les logs serveur
+            st.toast(f"CacheYF non sauvegardé : {erreur_cache}", icon="⚠️")
+        else:
+            print("[CACHE_YF] sauvegarde OK", flush=True)
         st.session_state['sig_cache_yf'] = sig_cache
 
     with tab_dec:
@@ -2172,6 +2236,39 @@ try:
                          column_config=config_colonnes_communes())
         else:
             st.success("Aucun titre du portefeuille en signal Vendre. ✅")
+
+        # --- v8 : gains RÉALISÉS depuis l'onglet AchatVente (ventes complétées) ---
+        df_av = charger_achat_vente()
+        if not df_av.empty and "Date de vente" in df_av.columns:
+            def _nombres_fr(serie):
+                return pd.to_numeric(
+                    serie.astype(str)
+                         .str.replace(chr(0xa0), '', regex=False)
+                         .str.replace(chr(0x202f), '', regex=False)
+                         .str.replace(' ', '', regex=False)
+                         .str.replace('$', '', regex=False)
+                         .str.replace(',', '.', regex=False),
+                    errors='coerce')
+            vendues = df_av[df_av["Date de vente"].astype(str).str.strip() != ""].copy()
+            if not vendues.empty and "Montant achat" in vendues.columns and "Montant vente" in vendues.columns:
+                vendues["Gain réalisé"] = _nombres_fr(vendues["Montant vente"]) - _nombres_fr(vendues["Montant achat"])
+                vendues["Année"] = vendues["Date de vente"].astype(str).str.slice(0, 4)
+                vendues = vendues.dropna(subset=["Gain réalisé"])
+            if not vendues.empty and "Gain réalisé" in vendues.columns:
+                st.markdown("#### 💰 Gains réalisés (ventes complétées — onglet AchatVente)")
+                total_real = vendues["Gain réalisé"].sum()
+                c_r1, c_r2 = st.columns(2)
+                c_r1.metric("Total réalisé (devises confondues)", f"{total_real:+,.2f} $")
+                c_r2.metric("Ventes complétées", f"{len(vendues)}")
+                cles_grp = ["Année"] + (["Dev"] if "Dev" in vendues.columns else [])
+                par_annee = (vendues.groupby(cles_grp)["Gain réalisé"]
+                             .agg(['sum', 'count']).reset_index()
+                             .rename(columns={'sum': 'Gain réalisé', 'count': 'Ventes'}))
+                st.dataframe(
+                    par_annee, hide_index=True, use_container_width=False,
+                    column_config={"Gain réalisé": st.column_config.NumberColumn("Gain réalisé", format="$ %.2f"),
+                                   "Ventes": st.column_config.NumberColumn("Ventes", format="%d")}
+                )
 
         # --- Protection des gains : fortes baisses depuis le sommet 52 sem ---
         if 'Baisse 52s %' in df_live.columns and not df_live.empty:
