@@ -2265,7 +2265,8 @@ try:
                     errors='coerce')
             vendues = df_av[df_av["Date de vente"].astype(str).str.strip() != ""].copy()
             if not vendues.empty and "Montant achat" in vendues.columns and "Montant vente" in vendues.columns:
-                vendues["Gain réalisé"] = _nombres_fr(vendues["Montant vente"]) - _nombres_fr(vendues["Montant achat"])
+                vendues["Investi"] = _nombres_fr(vendues["Montant achat"])
+                vendues["Gain réalisé"] = _nombres_fr(vendues["Montant vente"]) - vendues["Investi"]
                 vendues["Année"] = vendues["Date de vente"].astype(str).str.slice(0, 4)
                 vendues = vendues.dropna(subset=["Gain réalisé"])
             if not vendues.empty and "Gain réalisé" in vendues.columns:
@@ -2275,12 +2276,19 @@ try:
                 c_r1.metric("Total réalisé (devises confondues)", f"{total_real:+,.2f} $")
                 c_r2.metric("Ventes complétées", f"{len(vendues)}")
                 cles_grp = ["Année"] + (["Dev"] if "Dev" in vendues.columns else [])
-                par_annee = (vendues.groupby(cles_grp)["Gain réalisé"]
-                             .agg(['sum', 'count']).reset_index()
-                             .rename(columns={'sum': 'Gain réalisé', 'count': 'Ventes'}))
+                par_annee = (vendues.groupby(cles_grp)
+                             .agg(**{"Gain réalisé": ("Gain réalisé", "sum"),
+                                     "Investi": ("Investi", "sum"),
+                                     "Ventes": ("Gain réalisé", "count")})
+                             .reset_index())
+                # Gain % = gain réalisé / montant investi de l'année (par devise)
+                par_annee["Gain %"] = (par_annee["Gain réalisé"] / par_annee["Investi"] * 100
+                                       ).where(par_annee["Investi"] > 0)
+                colonnes_gr = cles_grp + ["Gain réalisé", "Gain %", "Ventes"]
                 st.dataframe(
-                    par_annee, hide_index=True, use_container_width=False,
+                    par_annee[colonnes_gr], hide_index=True, use_container_width=False,
                     column_config={"Gain réalisé": st.column_config.NumberColumn("Gain réalisé", format="$ %.2f"),
+                                   "Gain %": st.column_config.NumberColumn("Gain %", format="%.1f %%"),
                                    "Ventes": st.column_config.NumberColumn("Ventes", format="%d")}
                 )
 
