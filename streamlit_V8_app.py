@@ -371,6 +371,13 @@ def preparer_export_csv(df):
 # =================================================================================
 ENTETE_JOURNAL = ["Date", "Type", "Symbole", "Signal", "Prix", "Rang", "Pré G %"]
 
+@st.cache_resource
+def _verrou_journal():
+    # Verrou PARTAGÉ entre toutes les sessions du serveur : deux sessions ouvertes en
+    # même temps (PC + téléphone) passaient toutes deux le garde « une fois par jour »
+    # avant que l'autre n'écrive -> lignes doublées (vu le 2026-07-12).
+    return {"date": None}
+
 def _num(v, defaut=None):
     n = pd.to_numeric(pd.Series([v]), errors='coerce').iloc[0]
     return defaut if pd.isna(n) else float(n)
@@ -394,12 +401,19 @@ def journaliser_signaux(df_port, df_pros, valeur_port=None, indices=None):
             garde = [vals[0]] + [r for r in vals[1:]
                                  if not (r and r[0] and r[0][:4].isdigit() and r[0][:10] < limite)]
             ws.update(garde, value_input_option="USER_ENTERED")   # écrase depuis A1
-            ws.resize(rows=max(len(garde) + 100, 200))            # coupe le surplus
+            # Réduire EXACTEMENT à la taille des données : une coupe plus large
+            # laisserait survivre les vieilles lignes entre les deux tailles.
+            # (append_rows ré-agrandit la grille tout seul ensuite.)
+            ws.resize(rows=max(len(garde), 2))
             vals = garde
 
         aujourdhui = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
         if any(r and r[0] == aujourdhui for r in vals[1:]):
-            return vals, False   # déjà journalisé aujourd'hui
+            return vals, False   # déjà journalisé aujourd'hui (visible dans le Sheet)
+        verrou = _verrou_journal()
+        if verrou.get("date") == aujourdhui:
+            return vals, False   # une AUTRE session vient de journaliser (écriture en vol)
+        verrou["date"] = aujourdhui   # réserver AVANT d'écrire (fenêtre de course ~nulle)
 
         lignes = []
         if df_pros is not None and not df_pros.empty:
