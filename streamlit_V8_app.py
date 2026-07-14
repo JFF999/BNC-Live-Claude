@@ -2281,16 +2281,37 @@ try:
                                      "Investi": ("Investi", "sum"),
                                      "Ventes": ("Gain réalisé", "count")})
                              .reset_index())
-                # Gain % = gain réalisé / montant investi de l'année (par devise)
+                # Ligne COMBINÉE par année (CAD + USD additionnés sans conversion,
+                # cohérent avec le « Total réalisé (devises confondues) » ci-dessus)
+                if "Dev" in vendues.columns:
+                    totaux = (vendues.groupby("Année")
+                              .agg(**{"Gain réalisé": ("Gain réalisé", "sum"),
+                                      "Investi": ("Investi", "sum"),
+                                      "Ventes": ("Gain réalisé", "count")})
+                              .reset_index())
+                    totaux["Dev"] = "CAD+USD"
+                    par_annee = pd.concat([par_annee, totaux], ignore_index=True)
+                    ordre_dev = {"CAD": 0, "USD": 1, "CAD+USD": 2}
+                    par_annee["_ordre"] = par_annee["Dev"].map(ordre_dev).fillna(9)
+                    par_annee = par_annee.sort_values(["Année", "_ordre"]).drop(columns="_ordre")
+                # Gain % = gain réalisé / montant investi de l'année
                 par_annee["Gain %"] = (par_annee["Gain réalisé"] / par_annee["Investi"] * 100
                                        ).where(par_annee["Investi"] > 0)
                 colonnes_gr = cles_grp + ["Gain réalisé", "Gain %", "Ventes"]
+
+                def _ligne_combinee(row):
+                    if row.get("Dev") == "CAD+USD":
+                        return ['background-color: rgba(255, 255, 255, .08); font-weight: 700;'] * len(row)
+                    return [''] * len(row)
+
                 st.dataframe(
-                    par_annee[colonnes_gr], hide_index=True, use_container_width=False,
+                    par_annee[colonnes_gr].style.apply(_ligne_combinee, axis=1),
+                    hide_index=True, use_container_width=False,
                     column_config={"Gain réalisé": st.column_config.NumberColumn("Gain réalisé", format="$ %.2f"),
                                    "Gain %": st.column_config.NumberColumn("Gain %", format="%.1f %%"),
                                    "Ventes": st.column_config.NumberColumn("Ventes", format="%d")}
                 )
+                st.caption("CAD+USD : montants additionnés sans conversion de devise.")
 
         # --- Protection des gains : fortes baisses depuis le sommet 52 sem ---
         if 'Baisse 52s %' in df_live.columns and not df_live.empty:
