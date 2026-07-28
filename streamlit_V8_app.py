@@ -827,8 +827,10 @@ def synchroniser_affaires():
     """v8 : bouton 📰 — copie Pré Aff / MAJ Aff depuis l'onglet « LesAffaires » vers
     l'onglet « Prospects » du MÊME classeur. Réutilise les helpers du script local
     (clé de symbole unifiée BBD.B/BBD-B.TO, la cible la plus récente gagne).
-    Renvoie (nb mis à jour, nb vidés)."""
-    from sync_affaires_vers_gsheet import parse_nombre, cle_symbole, date_key, trouver
+    Complète aussi les lignes ajoutées à la main (A+B seulement) : liens + GOOGLEFINANCE.
+    Renvoie (nb mis à jour, nb vidés, nb lignes complétées)."""
+    from sync_affaires_vers_gsheet import (parse_nombre, cle_symbole, date_key, trouver,
+                                           completer_lignes_prospects)
 
     sh = connecter_google_sheets()
     src = sh.worksheet("LesAffaires").get_all_values()
@@ -884,7 +886,9 @@ def synchroniser_affaires():
                 n_vides += 1
     if updates:
         ws.batch_update(updates, value_input_option='USER_ENTERED')
-    return n_maj, n_vides
+    # Lignes ajoutées à la main (A+B seulement) : compléter liens + GOOGLEFINANCE.
+    n_compl = completer_lignes_prospects(ws, vals)
+    return n_maj, n_vides, n_compl
 
 def url_google_sheet():
     # URL du Google Sheet pour le bouton « Ouvrir Sheet ».
@@ -913,8 +917,11 @@ if url_sheet:
 if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Prospects)"):
     try:
         with st.spinner("Import Les Affaires..."):
-            n_maj, n_vides = synchroniser_affaires()
-        st.toast(f"📰 Les Affaires : {n_maj} mis à jour, {n_vides} vidé(s).", icon="✅")
+            n_maj, n_vides, n_compl = synchroniser_affaires()
+        message = f"📰 Les Affaires : {n_maj} mis à jour, {n_vides} vidé(s)."
+        if n_compl:
+            message += f" {n_compl} nouvelle(s) ligne(s) complétée(s)."
+        st.toast(message, icon="✅")
         st.cache_data.clear()   # recharge les Pré Aff fraîches
         st.rerun()
     except Exception as e:

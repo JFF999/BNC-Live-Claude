@@ -119,6 +119,81 @@ def trouver(entetes, nom):
     return None
 
 
+# --- Complétion des lignes ajoutées à la main dans Prospects (A+B seulement) ---
+# Bourses Google Finance par suffixe Yahoo ; les classes d'action reprennent le
+# point côté GF (BBD-B.TO -> TSE:BBD.B). US : « SYM:NASDAQ » — la formule K du
+# Sheet retire « :NASDAQ » et GOOGLEFINANCE résout la bourse toute seule.
+SUFFIXE_GF = {'.TO': 'TSE', '.V': 'CVE', '.NE': 'NEO', '.CN': 'CNSX'}
+
+
+def symbole_gf(sym):
+    s = str(sym).strip().upper()
+    for suf, prefixe in SUFFIXE_GF.items():
+        if s.endswith(suf):
+            return f"{prefixe}:{s[:-len(suf)].replace('-', '.')}"
+    return f"{s.replace('-', '.')}:NASDAQ"
+
+
+def completer_lignes_prospects(ws, vals=None):
+    """Complète les colonnes dérivées des lignes ajoutées à la MAIN dans Prospects
+    (l'utilisateur ne remplit que Symbole + Description) : C Lien Yahoo,
+    J Lien Google Finance, L Prix GF et M Devise (formules GOOGLEFINANCE).
+    K (Symbole GF) se remplit seul via l'ARRAYFORMULA du Sheet ; F-I (Prix $,
+    Pré G %, Pré YF, MAJ YF) sont écrites par l'app au prochain passage Yahoo.
+
+    Une ligne n'est « nouvelle » que si Lien Yahoo ET Lien Google Finance sont
+    tous deux vides : on ne touche jamais aux lignes existantes (ex. les CDR
+    dont le Prix GF est vide EXPRÈS, Google Finance ne les couvrant pas).
+    Renvoie le nombre de lignes complétées."""
+    if vals is None:
+        vals = ws.get_all_values()
+    if not vals:
+        return 0
+    ent = vals[0]
+    i_sym = trouver(ent, 'Symbole')
+    i_desc = trouver(ent, 'Description')
+    i_ly = trouver(ent, 'Lien Yahoo')
+    i_lgf = trouver(ent, 'Lien Google Finance')
+    i_sgf = trouver(ent, 'Symbole GF')
+    i_pgf = trouver(ent, 'Prix GF')
+    i_dev = trouver(ent, 'Devise')
+    if i_sym is None or i_ly is None or i_lgf is None:
+        return 0
+
+    def cellule_vide(row, i):
+        return i is not None and (len(row) <= i or not str(row[i]).strip())
+
+    updates = []
+    n_completees = 0
+    for r, row in enumerate(vals[1:], start=2):
+        sym = str(row[i_sym]).strip().upper() if len(row) > i_sym else ''
+        if not sym or sym == '0':
+            continue
+        # Nouvelle ligne = les DEUX liens sont vides (sinon on ne touche à rien).
+        if not (cellule_vide(row, i_ly) and cellule_vide(row, i_lgf)):
+            continue
+
+        desc = (str(row[i_desc]).strip() if (i_desc is not None and len(row) > i_desc) else '') or sym
+        texte = f"{desc} ({sym}) Stock Price, News, Quote & History - Yahoo Finance".replace('"', '""')
+        updates.append({'range': gspread.utils.rowcol_to_a1(r, i_ly + 1),
+                        'values': [[f'=HYPERLINK("https://ca.finance.yahoo.com/quote/{sym}";"{texte}")']]})
+        updates.append({'range': gspread.utils.rowcol_to_a1(r, i_lgf + 1),
+                        'values': [[f"https://www.google.com/finance/beta/quote/{symbole_gf(sym)}"]]})
+        if i_sgf is not None:
+            cell_k = gspread.utils.rowcol_to_a1(r, i_sgf + 1)
+            if cellule_vide(row, i_pgf):
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pgf + 1),
+                                'values': [[f"=GOOGLEFINANCE({cell_k})"]]})
+            if cellule_vide(row, i_dev):
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_dev + 1),
+                                'values': [[f'=GOOGLEFINANCE({cell_k};"currency")']]})
+        n_completees += 1
+
+    if updates:
+        ws.batch_update(updates, value_input_option='USER_ENTERED')
+    return n_completees
+
+
 def date_key(s):
     """Clé de tri d'une date (chaîne) : datetime, ou datetime.min si illisible."""
     s = str(s).strip()
@@ -228,6 +303,11 @@ def main():
         if updates:
             ws.batch_update(updates, value_input_option='USER_ENTERED')
         journal(f"  [OK] {nom_feuille} : {n_maj} mis a jour, {n_vides} vide(s) (hors Surperformance).")
+
+        # Lignes ajoutees a la main (A+B seulement) : completer C/J/L/M.
+        n_compl = completer_lignes_prospects(ws, vals)
+        if n_compl:
+            journal(f"  [OK] {nom_feuille} : {n_compl} nouvelle(s) ligne(s) completee(s) (liens + GOOGLEFINANCE).")
 
     journal("Mise a jour Les Affaires terminee avec succes.")
 
