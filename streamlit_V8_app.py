@@ -828,19 +828,28 @@ def synchroniser_affaires():
     l'onglet « Prospects » du MÊME classeur. Réutilise les helpers du script local
     (clé de symbole unifiée BBD.B/BBD-B.TO, la cible la plus récente gagne).
     Renvoie (nb mis à jour, nb vidés)."""
-    from sync_affaires_vers_gsheet import parse_nombre, cle_symbole, date_key
+    from sync_affaires_vers_gsheet import parse_nombre, cle_symbole, date_key, trouver
 
     sh = connecter_google_sheets()
     src = sh.worksheet("LesAffaires").get_all_values()
+    # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes) ;
+    # repli sur A=Date / B=Symbole / D=Cours cible si une en-tête est absente.
+    ent_src = src[0] if src else []
+    i_date = trouver(ent_src, 'Date')
+    i_sym = trouver(ent_src, 'Symbole')
+    i_cible = trouver(ent_src, 'Cours cible')
+    if i_date is None:  i_date = 0
+    if i_sym is None:   i_sym = 1
+    if i_cible is None: i_cible = 3
     affaires = {}
     for row in src[1:]:
-        if len(row) <= 3:
+        if len(row) <= max(i_sym, i_cible, i_date):
             continue
-        sym = str(row[2]).strip().upper()          # C = Symbole
+        sym = str(row[i_sym]).strip().upper()      # « Symbole »
         if not sym:
             continue
-        cible = parse_nombre(row[3])               # D = Cours cible
-        date = str(row[0]).strip()                 # A = Date
+        cible = parse_nombre(row[i_cible])         # « Cours cible »
+        date = str(row[i_date]).strip()            # « Date »
         if cible is None:
             continue
         cle = cle_symbole(sym)

@@ -4,7 +4,9 @@ Met à jour les données « Les Affaires » dans le Google Sheet Action_2026-c_N
 Surperformance_LesAffaires).
 
 Source (Action_2026-c_New, onglet LesAffaires) :
-    col A = Date (-> MAJ Aff)   |   col C = Symbole   |   col D = Cours cible (-> Pré Aff)
+    colonnes repérées par NOM d'en-tête : « Date » (-> MAJ Aff), « Symbole »,
+    « Cours cible » (-> Pré Aff). Disposition courante : A=Date, B=Symbole,
+    C=Description, D=Cours cible (le repérage par nom rend l'ordre indifférent).
 
 Destination (Action_2026-c_New), onglet « Prospects » :
     écrit « Pré Aff » et « MAJ Aff », appariés par clé de symbole unifiée
@@ -56,9 +58,10 @@ CHEMIN_LOG = os.path.join(dossier_actions(), "bnc_sync_log.txt")
 NOM_DEST = "Action_2026-c_New"
 ONGLET_SOURCE = "LesAffaires"    # onglet source, dans le MÊME classeur
 
-SRC_COL_DATE = 0      # A
-SRC_COL_SYMBOLE = 2   # C
-SRC_COL_CIBLE = 3     # D
+# Défauts de repli si l'en-tête correspondante est absente (sinon : repérage par nom).
+SRC_COL_DATE = 0      # A  (« Date »)
+SRC_COL_SYMBOLE = 1   # B  (« Symbole ») — était en C avant l'ajout de « Description »
+SRC_COL_CIBLE = 3     # D  (« Cours cible »)
 FEUILLES_DEST = ["Prospects"]
 SUFFIXES_CAD = ('.TO', '.V', '.NE', '.CN')
 # ===============================================================
@@ -141,15 +144,24 @@ def main():
     if n_purge:
         journal(f"{n_purge} entrée(s) de plus de {JOURS_RETENTION_SOURCE} j purgée(s) de « {ONGLET_SOURCE} ».")
     lignes = src.get_all_values()
+    # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes de
+    # « LesAffaires ») ; repli sur les défauts A/B/D si une en-tête est absente.
+    ent_src = lignes[0] if lignes else []
+    i_date = trouver(ent_src, 'Date')
+    i_sym = trouver(ent_src, 'Symbole')
+    i_cible = trouver(ent_src, 'Cours cible')
+    if i_date is None:  i_date = SRC_COL_DATE
+    if i_sym is None:   i_sym = SRC_COL_SYMBOLE
+    if i_cible is None: i_cible = SRC_COL_CIBLE
     affaires = {}
     for row in lignes[1:]:
-        if len(row) <= SRC_COL_CIBLE:
+        if len(row) <= max(i_sym, i_cible, i_date):
             continue
-        sym = str(row[SRC_COL_SYMBOLE]).strip().upper()
+        sym = str(row[i_sym]).strip().upper()
         if not sym:
             continue
-        cible = parse_nombre(row[SRC_COL_CIBLE])
-        date = str(row[SRC_COL_DATE]).strip()
+        cible = parse_nombre(row[i_cible])
+        date = str(row[i_date]).strip()
         if cible is None:
             continue
         # Cle UNIFIEE (exact/base/notation de classe confondus) : un meme titre peut
