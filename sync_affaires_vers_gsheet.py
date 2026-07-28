@@ -119,6 +119,78 @@ def trouver(entetes, nom):
     return None
 
 
+def notation_connue_prospects(vals_prospects):
+    """Map clé unifiée -> notation Yahoo telle qu'écrite dans Prospects
+    (source de vérité : AAPL -> AAPL, TECK-B.TO -> TECK-B.TO, ODV.V -> ODV.V).
+    Une clé portée par PLUSIEURS notations (titre US + son CDR canadien, ex.
+    NVDA et NVDA.TO) vaut None : « connu mais ambigu », le symbole source ne
+    sera PAS touché (l'appariement Pré Aff sert les deux de toute façon)."""
+    notation = {}
+    if not vals_prospects:
+        return notation
+    i_sym = trouver(vals_prospects[0], 'Symbole')
+    if i_sym is None:
+        return notation
+    for row in vals_prospects[1:]:
+        s = str(row[i_sym]).strip().upper() if len(row) > i_sym else ''
+        if s and s != '0':
+            cle = cle_symbole(s)
+            if cle in notation and notation[cle] != s:
+                notation[cle] = None          # ambigu : ne pas y toucher
+            elif cle not in notation:
+                notation[cle] = s
+    return notation
+
+
+def normaliser_symboles_source(ws, vals=None, notation_connue=None):
+    """Normalise la colonne Symbole de l'onglet LesAffaires : les entrées collées
+    depuis LesAffaires.com arrivent SANS suffixe de bourse (AC, TECK.B).
+    1) Si Prospects connaît le titre (clé unifiée), on adopte SA notation —
+       AAPL reste AAPL, TECK.B -> TECK-B.TO, ODV -> ODV.V. Indispensable : le
+       marqueur « $US » des cibles est inconsistant, plein de titres US n'en ont pas.
+    2) Sinon (symbole inconnu), règle du cours cible : cible non vide sans « US »
+       -> notation Yahoo « .TO » (point de classe -> tiret : QBR.B -> QBR-B.TO).
+    Écrit les corrections dans la feuille ET dans `vals` (pour la suite du run).
+    Renvoie le nombre de symboles corrigés."""
+    if vals is None:
+        vals = ws.get_all_values()
+    if not vals:
+        return 0
+    notation_connue = notation_connue or {}
+    ent = vals[0]
+    i_sym = trouver(ent, 'Symbole')
+    i_cible = trouver(ent, 'Cours cible')
+    if i_sym is None:  i_sym = SRC_COL_SYMBOLE
+    if i_cible is None: i_cible = SRC_COL_CIBLE
+
+    updates = []
+    for r, row in enumerate(vals[1:], start=2):
+        sym = str(row[i_sym]).strip().upper() if len(row) > i_sym else ''
+        if not sym:
+            continue
+        cle = cle_symbole(sym)
+        if cle in notation_connue:
+            connu = notation_connue[cle]
+            if connu is None:
+                continue                      # ambigu (US + CDR) : ne pas toucher
+            nouveau = connu                   # notation officielle de Prospects
+        else:
+            cible = str(row[i_cible]).strip() if len(row) > i_cible else ''
+            if not cible or 'US' in cible.upper():
+                continue                      # cible vide (devise inconnue) ou titre US
+            if sym.endswith(SUFFIXES_CAD):
+                continue                      # déjà en notation Yahoo canadienne
+            nouveau = sym.replace('.', '-') + '.TO'
+        if nouveau == sym == str(row[i_sym]).strip():
+            continue                          # déjà conforme
+        updates.append({'range': gspread.utils.rowcol_to_a1(r, i_sym + 1),
+                        'values': [[nouveau]]})
+        vals[r - 1][i_sym] = nouveau          # la suite du run lit le symbole corrigé
+    if updates:
+        ws.batch_update(updates, value_input_option='USER_ENTERED')
+    return len(updates)
+
+
 # --- Complétion des lignes ajoutées à la main dans Prospects (A+B seulement) ---
 # Bourses Google Finance par suffixe Yahoo ; les classes d'action reprennent le
 # point côté GF (BBD-B.TO -> TSE:BBD.B). US : « SYM:NASDAQ » — la formule K du
@@ -219,6 +291,15 @@ def main():
     if n_purge:
         journal(f"{n_purge} entrée(s) de plus de {JOURS_RETENTION_SOURCE} j purgée(s) de « {ONGLET_SOURCE} ».")
     lignes = src.get_all_values()
+    # Symboles collés sans suffixe de bourse : normaliser en notation Yahoo AVANT
+    # de construire la map (notation Prospects prioritaire, sinon règle du $US).
+    try:
+        vals_pros = dest_classeur.worksheet('Prospects').get_all_values()
+    except Exception:
+        vals_pros = []
+    n_norm = normaliser_symboles_source(src, lignes, notation_connue_prospects(vals_pros))
+    if n_norm:
+        journal(f"{n_norm} symbole(s) normalisé(s) dans « {ONGLET_SOURCE} ».")
     # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes de
     # « LesAffaires ») ; repli sur les défauts A/B/D si une en-tête est absente.
     ent_src = lignes[0] if lignes else []

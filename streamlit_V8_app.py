@@ -830,10 +830,18 @@ def synchroniser_affaires():
     Complète aussi les lignes ajoutées à la main (A+B seulement) : liens + GOOGLEFINANCE.
     Renvoie (nb mis à jour, nb vidés, nb lignes complétées)."""
     from sync_affaires_vers_gsheet import (parse_nombre, cle_symbole, date_key, trouver,
-                                           completer_lignes_prospects)
+                                           completer_lignes_prospects,
+                                           normaliser_symboles_source,
+                                           notation_connue_prospects)
 
     sh = connecter_google_sheets()
-    src = sh.worksheet("LesAffaires").get_all_values()
+    ws_src = sh.worksheet("LesAffaires")
+    src = ws_src.get_all_values()
+    ws_pros = sh.worksheet("Prospects")
+    vals_pros = ws_pros.get_all_values()
+    # Symboles collés sans suffixe : normaliser en notation Yahoo avant lecture
+    # (notation Prospects prioritaire, sinon règle du $US -> .TO).
+    normaliser_symboles_source(ws_src, src, notation_connue_prospects(vals_pros))
     # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes) ;
     # repli sur A=Date / B=Symbole / D=Cours cible si une en-tête est absente.
     ent_src = src[0] if src else []
@@ -859,8 +867,8 @@ def synchroniser_affaires():
         if ancien is None or date_key(date) >= date_key(ancien[0]):
             affaires[cle] = (date, cible)
 
-    ws = sh.worksheet("Prospects")
-    vals = ws.get_all_values()
+    ws = ws_pros
+    vals = vals_pros
     ent = [' '.join(str(h).split()) for h in vals[0]]
     i_sym, i_pa, i_maj = ent.index("Symbole"), ent.index("Pré Aff"), ent.index("MAJ Aff")
 
