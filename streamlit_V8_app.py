@@ -833,7 +833,8 @@ def synchroniser_affaires():
                                            completer_lignes_prospects,
                                            normaliser_symboles_source,
                                            notation_connue_prospects,
-                                           ajouter_titres_surperformance)
+                                           ajouter_titres_surperformance,
+                                           surligner_possedes)
 
     sh = connecter_google_sheets()
     ws_src = sh.worksheet("LesAffaires")
@@ -900,6 +901,12 @@ def synchroniser_affaires():
         ws.batch_update(updates, value_input_option='USER_ENTERED')
     # Lignes ajoutées à la main (A+B seulement) : compléter liens + GOOGLEFINANCE.
     n_compl = completer_lignes_prospects(ws, vals)
+    # Fond jaune sur les titres de Prospects présents dans Portefeuille BNC.
+    try:
+        vals_port = sh.worksheet("Portefeuille BNC").get_all_values()
+        surligner_possedes(sh, ws, vals, vals_port)
+    except Exception:
+        pass                      # le surlignage ne doit jamais faire échouer l'import
     return n_maj, n_vides, n_compl, ajoutes
 
 def url_google_sheet():

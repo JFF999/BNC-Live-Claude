@@ -260,6 +260,63 @@ def ajouter_titres_surperformance(ws_prospects, vals_prospects, lignes_source, s
     return [sym for _, sym, _d in a_ajouter.values()]
 
 
+# Jaune doux — même teinte que le surlignage « possédé » de l'app (or à 40 % sur blanc).
+COULEUR_POSSEDE = {'red': 1.0, 'green': 0.937, 'blue': 0.6}
+
+
+def surligner_possedes(spreadsheet, ws_prospects, vals_prospects, vals_portefeuille):
+    """Fond JAUNE sur chaque ligne de Prospects dont le titre est aussi dans
+    Portefeuille BNC (clé unifiée ; lignes No.=0 du portefeuille ignorées),
+    fond par défaut sur les autres — un titre vendu perd donc son jaune.
+    Les plages contiguës sont regroupées (peu de requêtes). Renvoie le
+    nombre de lignes surlignées."""
+    if not vals_prospects or len(vals_prospects) < 2:
+        return 0
+    ent_p = vals_prospects[0]
+    i_sym = trouver(ent_p, 'Symbole')
+    if i_sym is None:
+        return 0
+
+    cles_port = set()
+    if vals_portefeuille:
+        ent_b = vals_portefeuille[0]
+        i_sym_b = trouver(ent_b, 'Symbole')
+        i_no = trouver(ent_b, 'No.')
+        if i_sym_b is not None:
+            for row in vals_portefeuille[1:]:
+                s = str(row[i_sym_b]).strip().upper() if len(row) > i_sym_b else ''
+                if not s or s == '0':
+                    continue
+                if i_no is not None and len(row) > i_no and str(row[i_no]).strip() == '0':
+                    continue                  # ligne inactive du portefeuille
+                cles_port.add(cle_symbole(s))
+
+    n_cols = len(ent_p)
+    etats = []                                # True = à surligner
+    for row in vals_prospects[1:]:
+        s = str(row[i_sym]).strip().upper() if len(row) > i_sym else ''
+        etats.append(bool(s) and s != '0' and cle_symbole(s) in cles_port)
+
+    requests = []
+    debut = 0
+    for i in range(1, len(etats) + 1):
+        if i == len(etats) or etats[i] != etats[debut]:
+            if etats[debut]:
+                cell = {'userEnteredFormat': {'backgroundColor': COULEUR_POSSEDE}}
+            else:
+                cell = {'userEnteredFormat': {}}   # remet le fond par défaut
+            requests.append({'repeatCell': {
+                'range': {'sheetId': ws_prospects.id,
+                          'startRowIndex': debut + 1, 'endRowIndex': i + 1,
+                          'startColumnIndex': 0, 'endColumnIndex': n_cols},
+                'cell': cell,
+                'fields': 'userEnteredFormat.backgroundColor'}})
+            debut = i
+    if requests:
+        spreadsheet.batch_update({'requests': requests})
+    return sum(etats)
+
+
 # --- Complétion des lignes ajoutées à la main dans Prospects (A+B seulement) ---
 # Bourses Google Finance par suffixe Yahoo ; les classes d'action reprennent le
 # point côté GF (BBD-B.TO -> TSE:BBD.B). US : « SYM:NASDAQ » — la formule K du
@@ -469,6 +526,15 @@ def main():
         n_compl = completer_lignes_prospects(ws, vals)
         if n_compl:
             journal(f"  [OK] {nom_feuille} : {n_compl} nouvelle(s) ligne(s) completee(s) (liens + GOOGLEFINANCE).")
+
+        # Surligner en jaune les titres de Prospects presents dans Portefeuille BNC.
+        if nom_feuille == 'Prospects':
+            try:
+                vals_port = dest.worksheet('Portefeuille BNC').get_all_values()
+                n_jaune = surligner_possedes(dest, ws, vals, vals_port)
+                journal(f"  [OK] {nom_feuille} : {n_jaune} ligne(s) surlignee(s) (titres du portefeuille).")
+            except Exception as e:
+                journal(f"  [ATTENTION] surlignage : {type(e).__name__} - {e}")
 
     journal("Mise a jour Les Affaires terminee avec succes.")
 
