@@ -191,6 +191,75 @@ def normaliser_symboles_source(ws, vals=None, notation_connue=None):
     return len(updates)
 
 
+def ajouter_titres_surperformance(ws_prospects, vals_prospects, lignes_source, seuil=15.0):
+    """Ajoute à Prospects une ligne (Symbole + Description seulement) pour chaque
+    titre de l'onglet LesAffaires qui respecte LES TROIS critères :
+      1) absent de Prospects (clé de symbole unifiée) ;
+      2) Note = « Surperformance » (strict : « Surperformance sectorielle » exclu) ;
+      3) Potentiel >= 15 % (texte FR « 34,70% » toléré).
+    N'écrit que les colonnes A/B : les liens et formules GOOGLEFINANCE viennent de
+    completer_lignes_prospects, Pré Aff/MAJ Aff de la synchro, F-I de l'app.
+    Met aussi à jour `vals_prospects` en mémoire (les étapes suivantes du même run
+    voient les nouvelles lignes). Renvoie la liste des symboles ajoutés."""
+    if not vals_prospects or not lignes_source:
+        return []
+    ent_p = vals_prospects[0]
+    i_sym_p = trouver(ent_p, 'Symbole')
+    i_desc_p = trouver(ent_p, 'Description')
+    if i_sym_p is None:
+        return []
+    cles_presentes = set()
+    for row in vals_prospects[1:]:
+        s = str(row[i_sym_p]).strip().upper() if len(row) > i_sym_p else ''
+        if s and s != '0':
+            cles_presentes.add(cle_symbole(s))
+
+    ent_s = lignes_source[0]
+    i_sym = trouver(ent_s, 'Symbole')
+    i_desc = trouver(ent_s, 'Description')
+    i_pot = trouver(ent_s, 'Potentiel')
+    i_note = trouver(ent_s, 'Note')
+    i_date = trouver(ent_s, 'Date')
+    if i_sym is None or i_pot is None or i_note is None:
+        return []
+
+    a_ajouter = {}                     # cle -> (date, symbole, description) ; la plus RÉCENTE gagne
+    for row in lignes_source[1:]:
+        sym = str(row[i_sym]).strip().upper() if len(row) > i_sym else ''
+        if not sym:
+            continue
+        note = str(row[i_note]).strip().lower() if len(row) > i_note else ''
+        if note != 'surperformance':
+            continue
+        pot = parse_nombre(str(row[i_pot]).replace('%', '')) if len(row) > i_pot else None
+        if pot is None or pot < seuil:
+            continue
+        cle = cle_symbole(sym)
+        if cle in cles_presentes:
+            continue
+        desc = str(row[i_desc]).strip() if (i_desc is not None and len(row) > i_desc) else ''
+        date = str(row[i_date]).strip() if (i_date is not None and len(row) > i_date) else ''
+        ancien = a_ajouter.get(cle)
+        if ancien is None or date_key(date) >= date_key(ancien[0]):
+            a_ajouter[cle] = (date, sym, desc or sym)
+
+    if not a_ajouter:
+        return []
+    # Écrire UNIQUEMENT A:B (ne jamais poser de '' sous l'ARRAYFORMULA de K).
+    premiere = len(vals_prospects) + 1
+    nouvelles_ab = [[sym, desc] for _, sym, desc in a_ajouter.values()]
+    ws_prospects.update(nouvelles_ab,
+                        f"A{premiere}:B{premiere + len(nouvelles_ab) - 1}",
+                        value_input_option='USER_ENTERED')
+    for _, sym, desc in a_ajouter.values():
+        ligne = [''] * len(ent_p)
+        ligne[i_sym_p] = sym
+        if i_desc_p is not None:
+            ligne[i_desc_p] = desc
+        vals_prospects.append(ligne)
+    return [sym for _, sym, _d in a_ajouter.values()]
+
+
 # --- Complétion des lignes ajoutées à la main dans Prospects (A+B seulement) ---
 # Bourses Google Finance par suffixe Yahoo ; les classes d'action reprennent le
 # point côté GF (BBD-B.TO -> TSE:BBD.B). US : « SYM:NASDAQ » — la formule K du
@@ -294,12 +363,23 @@ def main():
     # Symboles collés sans suffixe de bourse : normaliser en notation Yahoo AVANT
     # de construire la map (notation Prospects prioritaire, sinon règle du $US).
     try:
-        vals_pros = dest_classeur.worksheet('Prospects').get_all_values()
+        ws_pros = dest_classeur.worksheet('Prospects')
+        vals_pros = ws_pros.get_all_values()
     except Exception:
-        vals_pros = []
+        ws_pros, vals_pros = None, []
     n_norm = normaliser_symboles_source(src, lignes, notation_connue_prospects(vals_pros))
     if n_norm:
         journal(f"{n_norm} symbole(s) normalisé(s) dans « {ONGLET_SOURCE} ».")
+
+    # Nouveaux titres « Surperformance » (Potentiel >= 15 %) absents de Prospects :
+    # créer leur ligne (A+B) — la suite du run remplit Pré Aff, liens et formules.
+    if ws_pros is not None:
+        try:
+            ajoutes = ajouter_titres_surperformance(ws_pros, vals_pros, lignes)
+            if ajoutes:
+                journal(f"{len(ajoutes)} titre(s) Surperformance ajouté(s) à Prospects : {', '.join(ajoutes)}")
+        except Exception as e:
+            journal(f"  [ATTENTION] ajout Surperformance : {type(e).__name__} - {e}")
     # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes de
     # « LesAffaires ») ; repli sur les défauts A/B/D si une en-tête est absente.
     ent_src = lignes[0] if lignes else []

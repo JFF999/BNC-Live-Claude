@@ -832,7 +832,8 @@ def synchroniser_affaires():
     from sync_affaires_vers_gsheet import (parse_nombre, cle_symbole, date_key, trouver,
                                            completer_lignes_prospects,
                                            normaliser_symboles_source,
-                                           notation_connue_prospects)
+                                           notation_connue_prospects,
+                                           ajouter_titres_surperformance)
 
     sh = connecter_google_sheets()
     ws_src = sh.worksheet("LesAffaires")
@@ -842,6 +843,9 @@ def synchroniser_affaires():
     # Symboles collés sans suffixe : normaliser en notation Yahoo avant lecture
     # (notation Prospects prioritaire, sinon règle du $US -> .TO).
     normaliser_symboles_source(ws_src, src, notation_connue_prospects(vals_pros))
+    # Titres Surperformance (Potentiel >= 15 %) absents de Prospects : créer la
+    # ligne A+B — le reste du run remplit Pré Aff, liens et formules.
+    ajoutes = ajouter_titres_surperformance(ws_pros, vals_pros, src)
     # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes) ;
     # repli sur A=Date / B=Symbole / D=Cours cible si une en-tête est absente.
     ent_src = src[0] if src else []
@@ -896,7 +900,7 @@ def synchroniser_affaires():
         ws.batch_update(updates, value_input_option='USER_ENTERED')
     # Lignes ajoutées à la main (A+B seulement) : compléter liens + GOOGLEFINANCE.
     n_compl = completer_lignes_prospects(ws, vals)
-    return n_maj, n_vides, n_compl
+    return n_maj, n_vides, n_compl, ajoutes
 
 def url_google_sheet():
     # URL du Google Sheet pour le bouton « Ouvrir Sheet ».
@@ -925,9 +929,11 @@ if url_sheet:
 if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Prospects)"):
     try:
         with st.spinner("Import Les Affaires..."):
-            n_maj, n_vides, n_compl = synchroniser_affaires()
+            n_maj, n_vides, n_compl, ajoutes = synchroniser_affaires()
         message = f"📰 Les Affaires : {n_maj} mis à jour, {n_vides} vidé(s)."
-        if n_compl:
+        if ajoutes:
+            message += f" ➕ Surperformance : {', '.join(ajoutes)}."
+        elif n_compl:
             message += f" {n_compl} nouvelle(s) ligne(s) complétée(s)."
         st.toast(message, icon="✅")
         st.cache_data.clear()   # recharge les Pré Aff fraîches
