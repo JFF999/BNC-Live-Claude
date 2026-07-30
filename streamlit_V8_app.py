@@ -692,6 +692,14 @@ with col_param:
             # Auto : téléphone en PORTRAIT = mobile ; en PAYSAGE = complet
             mode_mobile = est_mobile() and not orientation_paysage()
 
+        # Hauteur des tableaux Portefeuille / Prospects : au-delà de ce nombre de
+        # lignes, le tableau défile à l'interne et son en-tête reste figé. Sur un
+        # grand écran (ex. 4K), monter la valeur pour voir plus de lignes d'un coup.
+        lignes_max_tableau = st.number_input(
+            "Lignes visibles max dans les tableaux (en-tête figé au-delà)",
+            min_value=5, max_value=80, value=pref_int('lignes_max_tableau', 18), step=1
+        )
+
         st.markdown("---")
         st.markdown("**Affichage des Colonnes**")
         afficher_no = st.checkbox("Afficher No.", value=pref_bool('afficher_no', True))
@@ -769,6 +777,7 @@ with col_param:
         'tri_portefeuille': colonne_tri,
         'min_analystes': str(min_analystes), 'mois_max_aff': str(mois_max_aff),
         'plafond_preg': str(plafond_preg), 'seuil_baisse': str(seuil_baisse),
+        'lignes_max_tableau': str(lignes_max_tableau),
     }
     for nom_p, val_p in (('afficher_no', afficher_no), ('afficher_desc', afficher_desc),
                          ('afficher_dev', afficher_dev), ('afficher_compte', afficher_compte),
@@ -1754,10 +1763,14 @@ def config_largeur_pourquoi(df, largeur_max=1100):
     except Exception:
         return {"Pourquoi": st.column_config.TextColumn("Pourquoi", width="large")}
 
-def hauteur_tableau(nb_lignes, max_lignes=18):
+def hauteur_tableau(nb_lignes, max_lignes=None):
     # Hauteur plafonnée à max_lignes visibles : au-delà, le tableau défile à
     # l'interne et sa ligne d'en-tête reste figée (comportement natif de
     # st.dataframe). En deçà, la hauteur épouse le contenu comme avant.
+    # Le plafond vient de la préférence ⚙️ « Lignes visibles max » (grand écran
+    # 4K -> monter la valeur ; Streamlit ne sait pas mesurer l'écran lui-même).
+    if max_lignes is None:
+        max_lignes = globals().get('lignes_max_tableau', 18)
     return (min(nb_lignes, max_lignes) * 35) + 43
 
 def config_colonnes_communes():
