@@ -260,6 +260,72 @@ def ajouter_titres_surperformance(ws_prospects, vals_prospects, lignes_source, s
     return [sym for _, sym, _d in a_ajouter.values()]
 
 
+ONGLET_TOP50 = "Aff_Top50Quebec"   # palmarès Les Affaires « Top 50 Québec »
+
+
+def ajouter_titres_top50(ws_prospects, vals_prospects, lignes_top50, seuil=25.0):
+    """Ajoute à Prospects une ligne (Symbole + Description seulement) pour chaque
+    titre de l'onglet Aff_Top50Quebec (palmarès Les Affaires) qui respecte LES
+    DEUX critères :
+      1) absent de Prospects (clé de symbole unifiée) ;
+      2) Pré G % >= 25 % (texte FR « 34,44% » toléré).
+    Les symboles du palmarès sont déjà en notation Yahoo (ex. DRX.TO) ; la
+    description vient de « Nom de l'entreprise ». Même contrat que
+    ajouter_titres_surperformance : n'écrit que les colonnes A/B (liens et
+    formules via completer_lignes_prospects, Pré Aff via la synchro, F-I via
+    l'app), et met à jour `vals_prospects` en mémoire. Renvoie la liste des
+    symboles ajoutés."""
+    if not vals_prospects or not lignes_top50:
+        return []
+    ent_p = vals_prospects[0]
+    i_sym_p = trouver(ent_p, 'Symbole')
+    i_desc_p = trouver(ent_p, 'Description')
+    if i_sym_p is None:
+        return []
+    cles_presentes = set()
+    for row in vals_prospects[1:]:
+        s = str(row[i_sym_p]).strip().upper() if len(row) > i_sym_p else ''
+        if s and s != '0':
+            cles_presentes.add(cle_symbole(s))
+
+    ent_s = lignes_top50[0]
+    i_sym = trouver(ent_s, 'Symbole')
+    i_desc = trouver(ent_s, "Nom de l'entreprise")
+    i_preg = trouver(ent_s, 'Pré G %')
+    if i_sym is None or i_preg is None:
+        return []
+
+    a_ajouter = {}                     # cle -> (symbole, description)
+    for row in lignes_top50[1:]:
+        sym = str(row[i_sym]).strip().upper() if len(row) > i_sym else ''
+        if not sym:
+            continue
+        preg = parse_nombre(str(row[i_preg]).replace('%', '')) if len(row) > i_preg else None
+        if preg is None or preg < seuil:
+            continue
+        cle = cle_symbole(sym)
+        if cle in cles_presentes or cle in a_ajouter:
+            continue
+        desc = str(row[i_desc]).strip() if (i_desc is not None and len(row) > i_desc) else ''
+        a_ajouter[cle] = (sym, desc or sym)
+
+    if not a_ajouter:
+        return []
+    # Écrire UNIQUEMENT A:B (ne jamais poser de '' sous l'ARRAYFORMULA de K).
+    premiere = len(vals_prospects) + 1
+    nouvelles_ab = [[sym, desc] for sym, desc in a_ajouter.values()]
+    ws_prospects.update(nouvelles_ab,
+                        f"A{premiere}:B{premiere + len(nouvelles_ab) - 1}",
+                        value_input_option='USER_ENTERED')
+    for sym, desc in a_ajouter.values():
+        ligne = [''] * len(ent_p)
+        ligne[i_sym_p] = sym
+        if i_desc_p is not None:
+            ligne[i_desc_p] = desc
+        vals_prospects.append(ligne)
+    return [sym for sym, _d in a_ajouter.values()]
+
+
 # Jaune doux — même teinte que le surlignage « possédé » de l'app (or à 40 % sur blanc).
 COULEUR_POSSEDE = {'red': 1.0, 'green': 0.937, 'blue': 0.6}
 
@@ -437,6 +503,14 @@ def main():
                 journal(f"{len(ajoutes)} titre(s) Surperformance ajouté(s) à Prospects : {', '.join(ajoutes)}")
         except Exception as e:
             journal(f"  [ATTENTION] ajout Surperformance : {type(e).__name__} - {e}")
+        # Palmarès Top 50 Québec : titres à Pré G % >= 25 % absents de Prospects.
+        try:
+            src_top50 = dest_classeur.worksheet(ONGLET_TOP50).get_all_values()
+            ajoutes50 = ajouter_titres_top50(ws_pros, vals_pros, src_top50)
+            if ajoutes50:
+                journal(f"{len(ajoutes50)} titre(s) Top 50 Québec ajouté(s) à Prospects : {', '.join(ajoutes50)}")
+        except Exception as e:
+            journal(f"  [ATTENTION] ajout Top 50 Québec : {type(e).__name__} - {e}")
     # Colonnes repérées par NOM d'en-tête (robuste au déplacement des colonnes de
     # « LesAffaires ») ; repli sur les défauts A/B/D si une en-tête est absente.
     ent_src = lignes[0] if lignes else []
