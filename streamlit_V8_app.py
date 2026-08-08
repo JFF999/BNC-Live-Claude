@@ -289,7 +289,15 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
             'Var %': 'Var %',
             'Pré YF': 'Pré 1an $ Yahoo',
             'Gain $': 'Gain $',
+            # Moteur de décision (Prospects : en-têtes N-S ajoutées 2026-07-28)
+            'Score': 'Score',
+            'Conf.': 'Confiance',
+            'Risque': 'Risque',
+            'Rang': 'Achat Rang',
+            'Signal': 'Signal',
+            'Pourquoi': 'Pourquoi',
         }
+        colonnes_texte = {'Signal', 'Pourquoi'}   # écrites telles quelles (pas des nombres)
         colonnes_a_ecrire = {}
         for sheet_col, df_col in colonnes_cibles.items():
             if sheet_col in entetes:
@@ -329,8 +337,10 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
             for col1, df_col in colonnes_a_ecrire.items():
                 valeur = row_live.get(df_col)
                 if pd.notna(valeur):
+                    if df_col in colonnes_texte:
+                        valeur_finale = str(valeur)
                     # Pourcentage -> stocké en décimal (0.XX), comme dans la feuille
-                    if '%' in df_col:
+                    elif '%' in df_col:
                         valeur_finale = round(float(valeur) / 100.0, 4)
                     else:
                         valeur_finale = round(float(valeur), 2)
