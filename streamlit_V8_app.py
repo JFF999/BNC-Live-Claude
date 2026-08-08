@@ -672,12 +672,6 @@ with col_param:
         source_gain = st.selectbox("Calcul du Gain", OPTIONS_GAIN,
                                    index=pref_index('source_gain', OPTIONS_GAIN, 2))
 
-        # Tri du Portefeuille (déplacé depuis l'entête de l'onglet ; persisté).
-        # Pré G % se trie en ordre CROISSANT (proches de l'objectif en haut).
-        OPTIONS_TRI_PORT = ["Pré G %", "Gain %"]
-        colonne_tri = st.selectbox("Tri du Portefeuille", OPTIONS_TRI_PORT,
-                                   index=pref_index('tri_portefeuille', OPTIONS_TRI_PORT, 1))
-
         # === v7 : mode d'affichage — sur téléphone, colonnes ESSENTIELLES seulement ===
         OPTIONS_MODE = ["Auto (détection)", "Ordinateur (complet)", "Mobile (essentiel)"]
         mode_affichage = st.selectbox(
@@ -774,7 +768,6 @@ with col_param:
     # === v7 : sauvegarde silencieuse des préférences quand elles changent ===
     cfg_courant = {
         'source_gain': source_gain, 'mode_affichage': mode_affichage,
-        'tri_portefeuille': colonne_tri,
         'min_analystes': str(min_analystes), 'mois_max_aff': str(mois_max_aff),
         'plafond_preg': str(plafond_preg), 'seuil_baisse': str(seuil_baisse),
         'lignes_max_tableau': str(lignes_max_tableau),
@@ -2113,11 +2106,18 @@ try:
         with cols_s[idx_val]:
             st.markdown(f"<div class='stats-block' style='text-align: center;'><p style='margin: 0px; font-size: 13px; color: gray;'>{titre_valeur}</p><p style='margin: 0px; font-size: 16px; font-weight: bold;'>{valeur_formate}</p>{texte_taux}</div>", unsafe_allow_html=True)
 
-        # Pré G % se trie en ordre CROISSANT (titres proches/au-dessus de l'objectif = à surveiller en haut).
-        if colonne_tri == "Pré G %":
-            df_live = df_live.sort_values(by="Pré G %", ascending=True, na_position="last")
-        else:
-            df_live = df_live.sort_values(by=colonne_tri, ascending=False, na_position="last")
+        # Tri fixe à deux niveaux : 1) Signal par urgence de décision
+        # (Vendre > À surveiller > Attendre > sans signal), 2) Gain % décroissant.
+        ORDRE_SIGNAL_PORT = {"Vendre": 0, "À surveiller": 1, "Attendre": 2}
+        if "Signal" in df_live.columns and "Gain %" in df_live.columns:
+            df_live = (df_live
+                       .assign(_ordre_sig=df_live["Signal"].map(ORDRE_SIGNAL_PORT).fillna(9),
+                               _gain_tri=pd.to_numeric(df_live["Gain %"], errors="coerce"))
+                       .sort_values(by=["_ordre_sig", "_gain_tri"],
+                                    ascending=[True, False], na_position="last")
+                       .drop(columns=["_ordre_sig", "_gain_tri"]))
+        elif "Gain %" in df_live.columns:
+            df_live = df_live.sort_values(by="Gain %", ascending=False, na_position="last")
 
         colonnes_a_afficher = [c for c in colonnes_base_port if c in df_live.columns]
         config_description = config_largeur_description(df_live, afficher_desc)
