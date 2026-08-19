@@ -96,6 +96,55 @@ def parse_nombre(valeur):
         return None
 
 
+TAUX_USDCAD_DEFAUT = 1.38          # repli si Yahoo ne répond pas
+
+
+def taux_usdcad():
+    """Taux de change USD -> CAD (Yahoo), avec repli sur une valeur plausible.
+    Utilisé pour convertir un cours cible libellé en $US vers un titre coté en CAD."""
+    try:
+        import yfinance as yf
+        t = float(yf.Ticker("USDCAD=X").history(period="1d")['Close'].iloc[-1])
+        if t > 0:
+            return t
+    except Exception:
+        pass
+    return TAUX_USDCAD_DEFAUT
+
+
+def cible_est_us(texte):
+    """Vrai si le cours cible est explicitement libellé en dollars US (« 320,00 $US »).
+    ATTENTION : l'ABSENCE de marqueur ne prouve rien — beaucoup de cibles de titres
+    américains sont écrites « 350,00 $ » tout court. On ne convertit donc JAMAIS
+    dans l'autre sens (CAD -> USD), sous peine de fausser ces lignes-là."""
+    return 'US' in str(texte).upper()
+
+
+def convertir_cible(cible, texte_cible, devise_prospect, taux, prix_actuel=None, seuil=200.0):
+    """Cible exprimée en $US alors que le titre est coté en CAD -> conversion en CAD.
+    Tous les autres cas sont renvoyés inchangés. Renvoie (valeur, converti: bool).
+
+    GARDE-FOU CDR : un certificat canadien (GOOG.TO, NVDA.TO… sur Cboe Canada) ne
+    vaut PAS l'action américaine convertie au taux — c'est une fraction couverte
+    (GOOG.TO ~54 $ alors que GOOGL ~354 $US). Y appliquer le taux donnerait une
+    cible de 632 $ pour un titre à 54 $, soit +1062 % de potentiel. Si le prix
+    courant est connu et que la conversion donne un gain > `seuil` %, on laisse
+    donc la valeur BRUTE : l'app a déjà un mécanisme dédié (mise à l'échelle par
+    prix_CAD/prix_US dans construire_donnees) qui traite correctement les CDR."""
+    if cible is None:
+        return cible, False
+    if not (cible_est_us(texte_cible) and str(devise_prospect).strip().upper() == 'CAD'):
+        return cible, False
+    converti = round(cible * taux, 2)
+    try:
+        p = float(prix_actuel) if prix_actuel is not None else 0.0
+    except (TypeError, ValueError):
+        p = 0.0
+    if p > 0 and (converti - p) / p * 100.0 > seuil:
+        return cible, False        # CDR probable -> ne pas convertir ici
+    return converti, True
+
+
 def base_symbole(s):
     for suf in SUFFIXES_CAD:
         if s.endswith(suf):
@@ -531,12 +580,15 @@ def main():
         date = str(row[i_date]).strip()
         if cible is None:
             continue
+        # Texte BRUT conservé : parse_nombre efface le « US », or c'est lui qui dit
+        # la devise de la cible (conversion faite plus bas, selon la ligne Prospects).
+        texte_cible = str(row[i_cible])
         # Cle UNIFIEE (exact/base/notation de classe confondus) : un meme titre peut
         # apparaitre sous plusieurs notations et plusieurs dates -> on garde la PLUS RECENTE.
         cle = cle_symbole(sym)
         ancien = affaires.get(cle)
         if ancien is None or date_key(date) >= date_key(ancien[0]):
-            affaires[cle] = (date, cible)
+            affaires[cle] = (date, cible, texte_cible)
     journal(f"{len(affaires)} objectifs lus depuis l'onglet « {ONGLET_SOURCE} ».")
 
     # 2) Écrire dans chaque onglet de la destination
@@ -559,6 +611,14 @@ def main():
             journal(f"  [ATTENTION] '{nom_feuille}' : colonnes Symbole/Pré Aff introuvables - ignore.")
             continue
 
+        # Devise du titre (colonne « Devise » de Prospects) : sert à convertir une
+        # cible en $US vers un titre coté en CAD. Taux récupéré une seule fois,
+        # et seulement si au moins une cible est libellée en $US.
+        i_dev = trouver(entetes, 'Devise')
+        i_prix = trouver(entetes, 'Prix $')   # sert au garde-fou anti-CDR
+        taux = None
+        n_conv = 0
+
         updates = []
         n_maj = 0
         n_vides = 0
@@ -574,7 +634,17 @@ def main():
             pa_actuel = str(row[i_pa]).strip() if len(row) > i_pa else ""
             maj_actuel = str(row[i_maj]).strip() if (i_maj is not None and len(row) > i_maj) else ""
             if entree:
-                date, cible = entree
+                date, cible, texte_cible = entree
+                # Cible en $US sur un titre coté en CAD -> conversion au taux du jour.
+                devise = str(row[i_dev]).strip() if (i_dev is not None and len(row) > i_dev) else ''
+                if cible_est_us(texte_cible) and devise.upper() == 'CAD':
+                    if taux is None:
+                        taux = taux_usdcad()
+                        journal(f"  Taux de conversion USD->CAD : {taux:.4f}")
+                    prix_c = parse_nombre(row[i_prix]) if (i_prix is not None and len(row) > i_prix) else None
+                    cible, converti = convertir_cible(cible, texte_cible, devise, taux, prix_c)
+                    if converti:
+                        n_conv += 1
                 updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [[cible]]})
                 if i_maj is not None and date:
                     updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [[date]]})
@@ -594,7 +664,8 @@ def main():
 
         if updates:
             ws.batch_update(updates, value_input_option='USER_ENTERED')
-        journal(f"  [OK] {nom_feuille} : {n_maj} mis a jour, {n_vides} vide(s) (hors Surperformance).")
+        journal(f"  [OK] {nom_feuille} : {n_maj} mis a jour, {n_vides} vide(s) (hors Surperformance)"
+                + (f", {n_conv} cible(s) $US converties en CAD." if n_conv else "."))
 
         # Lignes ajoutees a la main (A+B seulement) : completer C/J/L/M.
         n_compl = completer_lignes_prospects(ws, vals)

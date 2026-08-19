@@ -847,7 +847,8 @@ def synchroniser_affaires():
                                            notation_connue_prospects,
                                            ajouter_titres_surperformance,
                                            ajouter_titres_top50, ONGLET_TOP50,
-                                           surligner_possedes)
+                                           surligner_possedes,
+                                           cible_est_us, convertir_cible)
 
     sh = connecter_google_sheets()
     ws_src = sh.worksheet("LesAffaires")
@@ -887,17 +888,22 @@ def synchroniser_affaires():
         date = str(row[i_date]).strip()            # « Date »
         if cible is None:
             continue
+        # Texte brut gardé : parse_nombre efface le « US », or c'est lui qui donne
+        # la devise de la cible (conversion plus bas selon la Devise du prospect).
+        texte_cible = str(row[i_cible])
         cle = cle_symbole(sym)
         ancien = affaires.get(cle)
         if ancien is None or date_key(date) >= date_key(ancien[0]):
-            affaires[cle] = (date, cible)
+            affaires[cle] = (date, cible, texte_cible)
 
     ws = ws_pros
     vals = vals_pros
     ent = [' '.join(str(h).split()) for h in vals[0]]
     i_sym, i_pa, i_maj = ent.index("Symbole"), ent.index("Pré Aff"), ent.index("MAJ Aff")
+    i_dev = ent.index("Devise") if "Devise" in ent else None
+    i_prix = ent.index("Prix $") if "Prix $" in ent else None   # garde-fou anti-CDR
 
-    updates, n_maj, n_vides = [], 0, 0
+    updates, n_maj, n_vides, n_conv = [], 0, 0, 0
     for r, row in enumerate(vals[1:], start=2):
         if len(row) <= i_sym:
             continue
@@ -906,7 +912,18 @@ def synchroniser_affaires():
             continue
         entree = affaires.get(cle_symbole(sym))
         if entree:
-            date, cible = entree
+            date, cible, texte_cible = entree
+            # Cible libellée en $US sur un titre coté en CAD -> conversion au taux
+            # du jour (taux_usdcad : déjà mis en cache en haut de l'app).
+            devise = str(row[i_dev]).strip() if (i_dev is not None and len(row) > i_dev) else ''
+            prix_c = parse_nombre(row[i_prix]) if (i_prix is not None and len(row) > i_prix) else None
+            # plafond_preg = 0 signifie « garde-fou désactivé » côté affichage ; ici on
+            # garde toujours un seuil, sinon aucun CDR ne serait détecté.
+            seuil_cdr = float(plafond_preg) if plafond_preg and plafond_preg > 0 else 200.0
+            cible, converti = convertir_cible(cible, texte_cible, devise, taux_usdcad,
+                                              prix_c, seuil_cdr)
+            if converti:
+                n_conv += 1
             updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pa + 1), 'values': [[cible]]})
             updates.append({'range': gspread.utils.rowcol_to_a1(r, i_maj + 1), 'values': [[date]]})
             n_maj += 1
@@ -927,7 +944,7 @@ def synchroniser_affaires():
         surligner_possedes(sh, ws, vals, vals_port)
     except Exception:
         pass                      # le surlignage ne doit jamais faire échouer l'import
-    return n_maj, n_vides, n_compl, ajoutes, ajoutes_top50
+    return n_maj, n_vides, n_compl, ajoutes, ajoutes_top50, n_conv
 
 def url_google_sheet():
     # URL du Google Sheet pour le bouton « Ouvrir Sheet ».
@@ -956,8 +973,10 @@ if url_sheet:
 if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Prospects)"):
     try:
         with st.spinner("Import Les Affaires..."):
-            n_maj, n_vides, n_compl, ajoutes, ajoutes_top50 = synchroniser_affaires()
+            n_maj, n_vides, n_compl, ajoutes, ajoutes_top50, n_conv = synchroniser_affaires()
         message = f"📰 Les Affaires : {n_maj} mis à jour, {n_vides} vidé(s)."
+        if n_conv:
+            message += f" 💱 {n_conv} cible(s) $US converties en CAD."
         if ajoutes:
             message += f" ➕ Surperformance : {', '.join(ajoutes)}."
         if ajoutes_top50:
