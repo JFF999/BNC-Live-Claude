@@ -766,7 +766,7 @@ with col_param:
         afficher_concordance = st.checkbox("Afficher Concordance", value=pref_bool('afficher_concordance', False))
         afficher_entree = st.checkbox("Afficher Qualité d'entrée", value=pref_bool('afficher_entree', False))
         afficher_secteur = st.checkbox("Afficher Secteur", value=pref_bool('afficher_secteur', False))
-        trier_par_rang = st.checkbox("Trier les Prospects par Rang d'achat", value=pref_bool('trier_par_rang', True))
+        trier_par_rang = st.checkbox("Trier les Prospects par Signal puis Rang d'achat", value=pref_bool('trier_par_rang', True))
         afficher_baisse = st.checkbox("Afficher Baisse depuis sommet 52s (Portefeuille)", value=pref_bool('afficher_baisse', False))
         seuil_baisse = st.number_input(
             "Alerte si baisse depuis le sommet dépasse (%)",
@@ -1795,6 +1795,30 @@ def config_largeur_pourquoi(df, largeur_max=1100):
     except Exception:
         return {"Pourquoi": st.column_config.TextColumn("Pourquoi", width="large")}
 
+# Ordre de tri des signaux d'ACHAT : celui de SIGNAUX (Priorité en tête, puis
+# À surveiller, À valider, Risque élevé, Secondaire, Objectif atteint). Les
+# libellés hors liste (« Données insuffisantes ») ferment la marche.
+ORDRE_SIGNAL_PROS = {s: i for i, s in enumerate(SIGNAUX)}
+
+def trier_prospects(df, par_rang):
+    """Tri par défaut des onglets Prospects, en DEUX temps :
+       1) Signal (les Priorité en haut, selon l'ordre de SIGNAUX) ;
+       2) Rang d'achat décroissant — ou Score puis Confiance si la case
+          « Trier par Rang d'achat » est décochée dans ⚙️.
+    Pendant du tri Signal + Gain % du Portefeuille."""
+    if par_rang and "Achat Rang" in df.columns:
+        cles, ordres = ["Achat Rang"], [False]
+    else:
+        cles = [c for c in ("Score", "Confiance") if c in df.columns]
+        ordres = [False] * len(cles)
+    if "Signal" in df.columns:
+        df = df.assign(_ordre_sig=df["Signal"].map(ORDRE_SIGNAL_PROS).fillna(9))
+        cles, ordres = ["_ordre_sig"] + cles, [True] + ordres
+    if not cles:
+        return df
+    return (df.sort_values(by=cles, ascending=ordres, na_position="last")
+              .drop(columns="_ordre_sig", errors="ignore"))
+
 def hauteur_tableau(nb_lignes, max_lignes=None):
     # Hauteur plafonnée à max_lignes visibles : au-delà, le tableau défile à
     # l'interne et sa ligne d'en-tête reste figée (comportement natif de
@@ -2517,10 +2541,7 @@ try:
                                            & ~perime_cad.fillna(False).astype(bool)
                                            & (preg_cad >= 5))
             df_prospects_cad = df_prospects_cad[masque_cad]
-            if trier_par_rang and "Achat Rang" in df_prospects_cad.columns:
-                df_prospects_cad = df_prospects_cad.sort_values(by="Achat Rang", ascending=False, na_position="last")
-            else:
-                df_prospects_cad = df_prospects_cad.sort_values(by=["Score", "Confiance"], ascending=[False, False], na_position="last")
+            df_prospects_cad = trier_prospects(df_prospects_cad, trier_par_rang)
             if "Achat Rang" in df_prospects_cad.columns:   # === v7 : percentile dans la liste affichée ===
                 df_prospects_cad["Rang %"] = df_prospects_cad["Achat Rang"].rank(pct=True) * 100
 
@@ -2577,10 +2598,7 @@ try:
                                          & ~perime_us.fillna(False).astype(bool)
                                          & (preg_us >= 5))
             df_prospects_usd = df_prospects_usd[masque_us]
-            if trier_par_rang and "Achat Rang" in df_prospects_usd.columns:
-                df_prospects_usd = df_prospects_usd.sort_values(by="Achat Rang", ascending=False, na_position="last")
-            else:
-                df_prospects_usd = df_prospects_usd.sort_values(by=["Score", "Confiance"], ascending=[False, False], na_position="last")
+            df_prospects_usd = trier_prospects(df_prospects_usd, trier_par_rang)
             if "Achat Rang" in df_prospects_usd.columns:   # === v7 : percentile dans la liste affichée ===
                 df_prospects_usd["Rang %"] = df_prospects_usd["Achat Rang"].rank(pct=True) * 100
 
