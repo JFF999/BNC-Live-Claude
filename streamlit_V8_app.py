@@ -490,8 +490,11 @@ def sauvegarder_config_app(cfg):
             ws = sh.worksheet("Config")
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet("Config", rows=80, cols=2)
+        lignes = [["Paramètre", "Valeur"]] + [[k, v] for k, v in sorted(cfg.items())]
+        if ws.row_count < len(lignes):
+            ws.resize(rows=len(lignes) + 20)   # v9 : clés par appareil = ~2x plus de lignes
         ws.clear()
-        ws.update([["Paramètre", "Valeur"]] + [[k, v] for k, v in sorted(cfg.items())])
+        ws.update(lignes)
         return True
     except Exception:
         return False
@@ -500,19 +503,34 @@ if 'config_app' not in st.session_state:
     st.session_state['config_app'] = charger_config_app()
 CFG_APP = st.session_state['config_app']
 
+# === v9 : préférences PAR APPAREIL ==============================================
+# PC et téléphone n'écrasent plus mutuellement leurs réglages : les clés du
+# téléphone portent le suffixe « @mobile », celles du PC restent nues (compatibles
+# avec l'historique). À la première ouverture mobile, les valeurs PC servent de
+# point de départ (repli sur la clé nue).
+SUFFIXE_CFG = "@mobile" if est_mobile() else ""
+
+def _pref_brut(nom):
+    v = CFG_APP.get(nom + SUFFIXE_CFG)
+    return v if v is not None else CFG_APP.get(nom)
+
 def pref_bool(nom, defaut):
-    v = CFG_APP.get(nom)
+    v = _pref_brut(nom)
     return (v == "1") if v in ("0", "1") else defaut
 
 def pref_int(nom, defaut):
     try:
-        return int(float(CFG_APP.get(nom)))
+        return int(float(_pref_brut(nom)))
     except (TypeError, ValueError):
         return defaut
 
 def pref_index(nom, options, defaut):
-    v = CFG_APP.get(nom)
+    v = _pref_brut(nom)
     return options.index(v) if v in options else defaut
+
+def pref_texte(nom, defaut):
+    v = _pref_brut(nom)
+    return v if v is not None else defaut
 
 # === v7 : CACHE YF (onglet « CacheYF » du Sheet) ==================================
 # Sauvegarde les champs issus du .info Yahoo (chaleur, dividende, volatilité, secteur,
@@ -623,6 +641,70 @@ def charger_achat_vente():
         lignes.append(r)
     return pd.DataFrame(lignes, columns=ent)
 
+# === v9 : RENDEMENT PONDÉRÉ DANS LE TEMPS (courbe corrigée des achats/ventes) =====
+# La courbe « Portefeuille vs marché » était faussée par les mouvements d'argent :
+# un ACHAT (argent qui entre dans le périmètre suivi) faisait « monter » la courbe,
+# une VENTE la faisait « baisser ». On neutralise ces flux externes (onglet
+# AchatVente) pour ne garder que la performance des titres — comparable aux indices.
+# ==================================================================================
+def _serie_nombres_fr(serie):
+    return pd.to_numeric(
+        serie.astype(str)
+             .str.replace(chr(0xa0), '', regex=False)
+             .str.replace(chr(0x202f), '', regex=False)
+             .str.replace(' ', '', regex=False)
+             .str.replace('$', '', regex=False)
+             .str.replace(',', '.', regex=False),
+        errors='coerce')
+
+def flux_externes_achatvente(df_av):
+    """Flux externes NETS par date (YYYY-MM-DD) depuis AchatVente :
+    + Montant achat (entre dans le périmètre), - Montant vente (en sort)."""
+    if df_av is None or df_av.empty:
+        return pd.Series(dtype=float)
+    def _col(*noms):
+        for c in df_av.columns:
+            if ' '.join(str(c).split()).lower() in noms:
+                return c
+        return None
+    morceaux = []
+    c_da, c_ma = _col("date achat", "date d'achat"), _col("montant achat")
+    c_dv, c_mv = _col("date de vente", "date vente"), _col("montant vente")
+    if c_da and c_ma:
+        morceaux.append(pd.DataFrame({
+            "d": df_av[c_da].astype(str).str.strip().str.slice(0, 10),
+            "f": _serie_nombres_fr(df_av[c_ma])}))
+    if c_dv and c_mv:
+        morceaux.append(pd.DataFrame({
+            "d": df_av[c_dv].astype(str).str.strip().str.slice(0, 10),
+            "f": -_serie_nombres_fr(df_av[c_mv])}))
+    if not morceaux:
+        return pd.Series(dtype=float)
+    tout = pd.concat(morceaux, ignore_index=True)
+    tout = tout[(tout["d"].str.len() == 10) & tout["d"].str.slice(0, 4).str.isdigit()
+                & tout["f"].notna()]
+    return tout.groupby("d")["f"].sum()
+
+def rendement_pondere_temps(port, flux):
+    """Indice base 100 du rendement pondéré dans le temps : entre deux dates du
+    Journal, r = (V_t - flux de l'intervalle) / V_(t-1) - 1, enchaîné. Les flux
+    tombés entre deux points de valorisation (week-ends, jours sans ouverture de
+    l'app) sont rattachés à l'intervalle qui les contient."""
+    port = pd.to_numeric(port, errors='coerce').dropna()
+    if len(port) < 2:
+        return None
+    dates = list(port.index)
+    idx = [100.0]
+    for i in range(1, len(dates)):
+        v0, v1 = float(port.iloc[i - 1]), float(port.iloc[i])
+        if v0 <= 0:
+            return None
+        f = 0.0
+        if len(flux):
+            f = float(flux[(flux.index > dates[i - 1]) & (flux.index <= dates[i])].sum())
+        idx.append(idx[-1] * ((v1 - f) / v0))
+    return pd.Series(idx, index=port.index)
+
 # --- TITRE (v8 : compact, sur la même ligne que les boutons) ---
 heure_actuelle = heure_mise_a_jour()
 taux_usdcad = obtenir_taux_change()
@@ -666,7 +748,7 @@ def orientation_paysage():
 
 # Libellés compacts sur mobile (mode connu AVANT le popover grâce à la préférence
 # persistée ; « Auto » retombe sur la détection User-Agent).
-_mode_pref = CFG_APP.get('mode_affichage', 'Auto (détection)')
+_mode_pref = pref_texte('mode_affichage', 'Auto (détection)')
 if _mode_pref == 'Auto (détection)':
     # téléphone EN PORTRAIT = mode mobile ; pivoté en PAYSAGE = affichage complet
     mobile_ui = est_mobile() and not orientation_paysage()
@@ -728,6 +810,8 @@ with col_param:
         afficher_tendance = st.checkbox("Afficher Tendance (1m)", value=pref_bool('afficher_tendance', False))
         afficher_chaleur = st.checkbox("Afficher Chaleur 52 sem.", value=pref_bool('afficher_chaleur', False))
         afficher_div = st.checkbox("Afficher Dividendes (Div %)", value=pref_bool('afficher_div', False))
+        afficher_gain_div = st.checkbox("Afficher Gain incluant dividendes (estimé)",
+                                        value=pref_bool('afficher_gain_div', True))  # === v9 ===
         afficher_analystes = st.checkbox("Afficher Nb d'analystes", value=pref_bool('afficher_analystes', False))  # === V4 ===
 
         st.markdown("---")
@@ -799,6 +883,7 @@ with col_param:
                          ('afficher_dev', afficher_dev), ('afficher_compte', afficher_compte),
                          ('afficher_var', afficher_var), ('afficher_tendance', afficher_tendance),
                          ('afficher_chaleur', afficher_chaleur), ('afficher_div', afficher_div),
+                         ('afficher_gain_div', afficher_gain_div),
                          ('afficher_analystes', afficher_analystes), ('afficher_signal', afficher_signal),
                          ('afficher_score', afficher_score), ('afficher_confiance', afficher_confiance),
                          ('afficher_risque', afficher_risque), ('afficher_volatilite', afficher_volatilite),
@@ -811,9 +896,12 @@ with col_param:
                          ('afficher_fondamentaux', afficher_fondamentaux), ('journaliser', journaliser),
                          ('rafraichir_auto', rafraichir_auto)):
         cfg_courant[nom_p] = "1" if val_p else "0"
-    if cfg_courant != {k: CFG_APP.get(k) for k in cfg_courant}:
-        if sauvegarder_config_app(cfg_courant):
-            st.session_state['config_app'] = dict(cfg_courant)
+    cfg_cles = {k + SUFFIXE_CFG: v for k, v in cfg_courant.items()}   # v9 : par appareil
+    if any(CFG_APP.get(k) != v for k, v in cfg_cles.items()):
+        cfg_complet = dict(CFG_APP)          # préserve les clés de l'AUTRE appareil
+        cfg_complet.update(cfg_cles)
+        if sauvegarder_config_app(cfg_complet):
+            st.session_state['config_app'] = cfg_complet
             CFG_APP = st.session_state['config_app']
             st.toast("⚙️ Préférences enregistrées.", icon="💾")
 
@@ -1780,6 +1868,29 @@ def calculer_score_decision(df, pour_portefeuille=False, secteurs_portefeuille=N
 
     return df
 
+def ajouter_dividendes_estimes(df):
+    """v9 : dividendes ESTIMÉS touchés depuis l'achat + gain total les incluant.
+    Approximation honnête : rendement COURANT (Div %) appliqué à toute la durée de
+    détention — les variations passées du dividende ne sont pas connues. Le Gain %
+    classique ignore les dividendes : BCE à ~5 % de rendement paraissait pire
+    qu'il ne l'est réellement."""
+    df = df.copy()
+    df['Div Reçus $'] = np.nan
+    df['Gain Tot %'] = np.nan
+    if not {'Prix $', 'Achat $', 'Date Achat'}.issubset(df.columns):
+        return df
+    prix = pd.to_numeric(df['Prix $'], errors='coerce')
+    achat = pd.to_numeric(df['Achat $'], errors='coerce')
+    qte = pd.to_numeric(df.get('Qtée'), errors='coerce').fillna(0)
+    divp = pd.to_numeric(df.get('Div %'), errors='coerce').fillna(0)      # en %
+    dates = pd.to_datetime(df['Date Achat'], errors='coerce')
+    annees = ((pd.Timestamp.now() - dates).dt.days / 365.25).clip(lower=0)
+    div_par_action = prix * divp / 100 * annees        # $ par action depuis l'achat
+    ok = prix.notna() & achat.notna() & (achat > 0) & dates.notna()
+    df.loc[ok, 'Div Reçus $'] = (div_par_action * qte)[ok]
+    df.loc[ok, 'Gain Tot %'] = (((prix - achat + div_par_action) / achat) * 100)[ok]
+    return df
+
 def couleur_var(valeur):
     if pd.isna(valeur): return ''
     if valeur > 0: return 'color: #00cc00;'
@@ -1934,6 +2045,9 @@ def config_colonnes_communes():
         "Achat $": st.column_config.NumberColumn("Achat", format="$ %.2f"),
         "Gain $": st.column_config.NumberColumn("Gain $", format="$ %.2f"),
         "Gain %": st.column_config.NumberColumn("Gain %", format="%.1f %%"),
+        "Gain Tot %": st.column_config.NumberColumn("Gain+div %", format="%.1f %%",
+                                                    help="Gain incluant les dividendes estimés depuis l'achat"),
+        "Div Reçus $": st.column_config.NumberColumn("Div reçus (est.)", format="$ %.0f"),
         "Var %": st.column_config.NumberColumn("Var %", format="%.1f %%"),
         "Pré G %": st.column_config.NumberColumn("Pré G %", format="%.1f %%"),
         "Pré YF Display": st.column_config.NumberColumn("Pré YF", format="$ %.2f"),
@@ -2094,6 +2208,7 @@ try:
     for col in ["Pré G %", "Gain %", "Var %"]:
         if col in df_live.columns: df_live[col] = pd.to_numeric(df_live[col], errors='coerce') * 100
     df_live = calculer_score_decision(df_live, pour_portefeuille=True)  # === v5 : signal de vente ===
+    df_live = ajouter_dividendes_estimes(df_live)   # === v9 : gain total avec dividendes ===
 
     # === v7 : concentration sectorielle du PORTEFEUILLE (nb de titres détenus par secteur),
     # utilisée pour pénaliser la sur-concentration dans le Rang d'achat des Prospects. ===
@@ -2143,6 +2258,8 @@ try:
     colonnes_base_port.append("Prix $")
     colonnes_base_port.append("Gain $")
     colonnes_base_port.append("Gain %")
+    if afficher_gain_div:
+        colonnes_base_port.extend(["Gain Tot %", "Div Reçus $"])   # === v9 : dividendes estimés ===
 
     # Portefeuille : seul le Signal (Vendre / À surveiller / Attendre) est affiché.
     # Score / Confiance / Risque restent réservés aux onglets Pros.
@@ -2550,7 +2667,10 @@ try:
         # --- Changements vs dernière séance + performance des signaux (via Journal) ---
         if journal_rows and len(journal_rows) > 1:
             jdf = pd.DataFrame(journal_rows[1:], columns=journal_rows[0])
-            jdf["Prix"] = pd.to_numeric(jdf.get("Prix"), errors="coerce")
+            # v9 : le Sheet renvoie les nombres au format FR (« 94806,74 ») — le
+            # to_numeric naïf mettait 98 % du Journal à NaN : courbe vs marché et
+            # performance des signaux restaient silencieusement vides.
+            jdf["Prix"] = _serie_nombres_fr(jdf.get("Prix"))
             dates = sorted(jdf["Date"].dropna().unique())
             aujourdhui = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d")
 
@@ -2602,6 +2722,14 @@ try:
                                               values="Prix", aggfunc="last").sort_index()
                 if len(pivot) >= 2:
                     norm = pivot.div(pivot.iloc[0]) * 100   # base 100 au 1er jour
+                    # === v9 : Portefeuille CORRIGÉ des achats/ventes (rendement pondéré
+                    # dans le temps) — un achat ne « monte » plus la courbe, une vente
+                    # ne la « baisse » plus ; seule la performance des titres compte.
+                    if "PORTEFEUILLE" in pivot.columns:
+                        _twr = rendement_pondere_temps(pivot["PORTEFEUILLE"],
+                                                       flux_externes_achatvente(df_av))
+                        if _twr is not None:
+                            norm["PORTEFEUILLE"] = _twr
                     norm = norm.rename(columns={"PORTEFEUILLE": "Portefeuille",
                                                 "^GSPTSE": "TSX", "^GSPC": "S&P 500"})
                     st.markdown("#### 📈 Portefeuille vs marché (base 100)")
@@ -2611,7 +2739,9 @@ try:
                         cparts = st.columns(len(dern))
                         for i_c, (nom_c, val_c) in enumerate(dern.items()):
                             cparts[i_c].metric(str(nom_c), f"{val_c - 100:+.1f} %")
-                    st.caption(f"Depuis le {pivot.index[0]} ({len(pivot)} jour(s) enregistré(s)).")
+                    st.caption(f"Depuis le {pivot.index[0]} ({len(pivot)} jour(s) enregistré(s)). "
+                               "Portefeuille corrigé des achats/ventes (AchatVente, rendement "
+                               "pondéré dans le temps ; devises additionnées sans conversion).")
                 else:
                     st.caption("📈 La courbe Portefeuille vs marché apparaîtra dès le 2e jour de données.")
         elif journaliser:
