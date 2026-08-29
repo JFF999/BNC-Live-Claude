@@ -29,7 +29,8 @@ SEUIL_ECRITURE = {
 }
 
 # Catégories de signal (du plus fort au plus faible)
-SIGNAUX = ["Priorité", "À surveiller", "À valider", "Risque élevé", "Secondaire", "Objectif atteint"]
+SIGNAUX = ["Priorité", "À surveiller", "À valider", "Risque élevé", "Secondaire",
+           "Objectif atteint", "Données insuffisantes"]
 
 # --- ASTUCE CSS : Optimisation totale de l'espace sur mobile ---
 st.markdown("""
@@ -178,19 +179,17 @@ def est_mobile():
 def heure_mise_a_jour():
     return datetime.now(ZoneInfo("America/Toronto")).strftime("%H:%M")
 
-@st.cache_data(ttl=300, show_spinner=False)
-def signature_donnees(symboles):
-    # Empreinte d'un rafraîchissement RÉEL des données : capturée au moment du
-    # téléchargement (mise en cache 5 min, comme le fetch Yahoo). Sert à déclencher
-    # la sauvegarde auto UNE fois par rafraîchissement (et non à chaque rerun Streamlit).
-    return datetime.now(ZoneInfo("America/Toronto")).isoformat()
+# (audit 2026-08-28 : signature_donnees supprimée — les sauvegardes auto sont
+#  déclenchées par les JETONS de rafraîchissement, voir sig_port / sig_pros plus bas.
+#  L'ancienne version, un now() caché 5 min, réécrivait les mêmes valeurs toutes les
+#  5 min et faisait avancer MAJ YF sans données neuves.)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def obtenir_taux_change():
     try:
         return yf.Ticker("USDCAD=X").history(period="1d")['Close'].iloc[-1]
     except Exception:
-        return 1.35
+        return 1.38   # repli aligné sur TAUX_USDCAD_DEFAUT du module sync
 
 # --- CONNEXION GOOGLE SHEETS ---
 def connecter_google_sheets():
@@ -362,15 +361,6 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
 
     except Exception as e:
         return False, f"Erreur Google Sheets : {e}"
-
-def preparer_export_csv(df):
-    df_export = df.copy()
-    if 'Symbole Brut' in df_export.columns:
-        df_export['Symbole'] = df_export['Symbole Brut']
-        df_export = df_export.drop(columns=['Symbole Brut'])
-    if 'Tendance' in df_export.columns:
-        df_export = df_export.drop(columns=['Tendance'])
-    return df_export.to_csv(index=False, sep=';').encode('utf-8-sig')
 
 # === v7 : JOURNAL DES SIGNAUX ====================================================
 # Archive une fois par jour, dans l'onglet « Journal » du Sheet, les signaux du moment :
@@ -731,7 +721,7 @@ with col_param:
         afficher_gain_jour = st.checkbox("Calculer le Gain du Jour", value=pref_bool('afficher_gain_jour', True))
         afficher_bandeau = st.checkbox("Afficher le Bandeau des Marchés", value=pref_bool('afficher_bandeau', False))
         afficher_alertes = st.checkbox("Activer les Alertes Intelligentes", value=pref_bool('afficher_alertes', False))
-        rafraichir_auto = st.checkbox("Rafraîchir auto (à l'ouverture + aux 10 min en séance)",
+        rafraichir_auto = st.checkbox("Rafraîchir auto (page aux 5 min en séance ; groupes 10/25/35 min)",
                                       value=pref_bool('rafraichir_auto', True))
 
         # === V4 : garde-fou sur la fiabilité de l'objectif Yahoo ===
@@ -805,19 +795,34 @@ with col_param:
             st.toast("⚙️ Préférences enregistrées.", icon="💾")
 
 # === v7 : état des bourses (US et TSX : 9 h 30 – 16 h, heure de l'Est, jours ouvrables).
-# La différence entre les deux vient des jours fériés propres à chaque pays (listes 2026).
-FERIES_US_2026 = {"2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
-                  "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25"}
-FERIES_CA_2026 = {"2026-01-01", "2026-02-16", "2026-04-03", "2026-05-18", "2026-07-01",
-                  "2026-08-03", "2026-09-07", "2026-10-12", "2026-12-25", "2026-12-28"}
+# La différence entre les deux vient des jours fériés propres à chaque pays.
+# Listes 2026 ET 2027 (à prolonger fin 2027).
+FERIES_US = {
+    # 2026
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    # 2027 — Juneteenth 19/06 = samedi -> vendredi 18 ; fête nationale 04/07 =
+    # dimanche -> lundi 5 ; Noël 25/12 = samedi -> vendredi 24
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+}
+FERIES_CA = {
+    # 2026
+    "2026-01-01", "2026-02-16", "2026-04-03", "2026-05-18", "2026-07-01",
+    "2026-08-03", "2026-09-07", "2026-10-12", "2026-12-25", "2026-12-28",
+    # 2027 — Noël 25/12 = samedi -> lundi 27 ; lendemain de Noël 26/12 =
+    # dimanche -> mardi 28
+    "2027-01-01", "2027-02-15", "2027-03-26", "2027-05-24", "2027-07-01",
+    "2027-08-02", "2027-09-06", "2027-10-11", "2027-12-27", "2027-12-28",
+}
 
 def statut_bourses():
     maintenant = datetime.now(ZoneInfo("America/Toronto"))
     date_jour = maintenant.strftime("%Y-%m-%d")
     en_heures = (9, 30) <= (maintenant.hour, maintenant.minute) < (16, 0)
     jour_ouvrable = maintenant.weekday() < 5
-    ouvert_us = jour_ouvrable and en_heures and date_jour not in FERIES_US_2026
-    ouvert_ca = jour_ouvrable and en_heures and date_jour not in FERIES_CA_2026
+    ouvert_us = jour_ouvrable and en_heures and date_jour not in FERIES_US
+    ouvert_ca = jour_ouvrable and en_heures and date_jour not in FERIES_CA
     return ouvert_us, ouvert_ca
 
 def prochaine_ouverture():
@@ -828,7 +833,7 @@ def prochaine_ouverture():
         ds = d.strftime("%Y-%m-%d")
         if d.weekday() >= 5:
             continue
-        if ds in FERIES_US_2026 and ds in FERIES_CA_2026:
+        if ds in FERIES_US and ds in FERIES_CA:
             continue
         ouverture = datetime(d.year, d.month, d.day, 9, 30, 30, tzinfo=ZoneInfo("America/Toronto"))
         if ouverture > maintenant:
@@ -1076,8 +1081,8 @@ def _fmt_sync(h):
 #                          pour réduire fortement le risque de blocage.
 # L'interface de sortie reste identique : { sym: {'hist': df, 'info': dict} }
 # ================================================================================
-@st.cache_data(ttl=28800, show_spinner=False)
-def telecharger_yahoo(groupes, retry_premier=False, jeton=None):
+@st.cache_data(ttl=28800, show_spinner=False, max_entries=8)
+def telecharger_yahoo(groupes, retry_premier=False, jeton=None, reels=None):
     # `jeton` ne sert qu'à contrôler le CACHE par groupe (clé de cache) :
     #  - mode normal : jeton = tranche de 5 min -> comportement classique (ttl 5 min) ;
     #  - mode auto en séance : jeton = compteur de version par groupe, incrémenté par
@@ -1091,6 +1096,14 @@ def telecharger_yahoo(groupes, retry_premier=False, jeton=None):
     groupes = [tuple(g) for g in groupes]
     tous = list(dict.fromkeys(s for g in groupes for s in g))
     resultats = {sym: {'hist': pd.DataFrame(), 'info': {}} for sym in tous}
+
+    # `reels` = symboles réellement présents dans le Sheet. Les équivalents US devinés
+    # par avec_us() (AC, TECK-B…) n'existent souvent PAS sur Yahoo : leurs .info vides
+    # ne doivent pas compter comme des échecs, sinon le détecteur de blocage déclarait
+    # « Yahoo bloque » à tort et sautait P2/P3 (audit 2026-08-28).
+    reels_set = set(reels) if reels else None
+    def est_reel(s):
+        return reels_set is None or s in reels_set
 
     # --- 1) PRIX & HISTORIQUE : un seul appel groupé (rapide, robuste) ---
     if tous:
@@ -1126,7 +1139,7 @@ def telecharger_yahoo(groupes, retry_premier=False, jeton=None):
                 sym, info, ok = future.result()
                 if ok:
                     resultats[sym]['info'] = info
-                else:
+                elif est_reel(sym):
                     echecs += 1
         return echecs
 
@@ -1142,11 +1155,14 @@ def telecharger_yahoo(groupes, retry_premier=False, jeton=None):
         # 1er groupe (Portefeuille en phase 1) : on retente les manquants après une pause.
         if niveau == 1 and retry_premier and echecs > 0:
             time.sleep(3)
-            manquants = [s for s in groupe if len(resultats[s]['info']) <= 5]
+            manquants = [s for s in groupe if est_reel(s) and len(resultats[s]['info']) <= 5]
             recuperer(manquants)
-            echecs = sum(1 for s in groupe if len(resultats[s]['info']) <= 5)
+            echecs = sum(1 for s in groupe if est_reel(s) and len(resultats[s]['info']) <= 5)
         # Trop d'échecs sur ce groupe => Yahoo bloque -> on saute les priorités SUIVANTES.
-        if len(groupe) >= 5 and echecs > len(groupe) * 0.5:
+        # Seuil mesuré sur les symboles RÉELS du groupe (candidats US devinés exclus
+        # du décompte comme de la base).
+        base_reels = sum(1 for s in groupe if est_reel(s))
+        if base_reels >= 5 and echecs > base_reels * 0.5:
             bloque = True
         else:
             niveaux_ok.append(niveau)
@@ -1221,6 +1237,8 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 prix_veille = serie_close.iloc[-2]
 
                 df.at[index, 'Prix $'] = prix_actuel
+                # NB : auto_adjust=True ajuste la clôture de la VEILLE un jour de
+                # détachement de dividende -> Var % peut différer un peu du courtier.
                 df.at[index, 'Var %'] = (prix_actuel - prix_veille) / prix_veille
                 df.at[index, 'Données OK'] = True
 
@@ -1347,12 +1365,20 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 if nom_entreprise:
                     df.at[index, 'Description'] = str(nom_entreprise)
 
-            # === V4 : correctif dividende ===
-            # yfinance renvoie selon les versions une FRACTION (0.025) ou déjà un % (2.5).
-            # Heuristique : une valeur < 1 est presque toujours une fraction -> *100.
+            # === Correctif dividende (audit 2026-08-28) ===
+            # dividendYield est aujourd'hui DÉJÀ en % (AAPL -> 0.34 = 0,34 %) : l'ancienne
+            # heuristique « < 1 -> ×100 » transformait 0,34 % en 34 % et gonflait le Score
+            # de tous les titres à rendement < 1 %. trailingAnnualDividendYield est resté
+            # une FRACTION stable -> source primaire ; dividendYield (en %) en repli.
+            div_frac = infos_gen.get('trailingAnnualDividendYield')
             div_yield = infos_gen.get('dividendYield')
-            if div_yield is not None and div_yield > 0:
-                df.at[index, 'Div %'] = div_yield * 100 if div_yield < 1 else div_yield
+            try:
+                if div_frac is not None and float(div_frac) > 0:
+                    df.at[index, 'Div %'] = float(div_frac) * 100
+                elif div_yield is not None and float(div_yield) > 0:
+                    df.at[index, 'Div %'] = float(div_yield)   # déjà en %
+            except (ValueError, TypeError):
+                pass
 
             low_52 = infos_gen.get('fiftyTwoWeekLow')
             high_52 = infos_gen.get('fiftyTwoWeekHigh')
@@ -1976,12 +2002,15 @@ try:
                 r.append(s)
         return tuple(r)
     g1, g2, g3 = dedup(grp1), dedup(grp2), dedup(grp3)
+    # Symboles RÉELS (présents dans le Sheet) : sert au décompte d'échecs de
+    # telecharger_yahoo — les équivalents US devinés par avec_us() en sont exclus.
+    symboles_reels = tuple(sorted(set(syms_port) | set(syms_pros) | {"^GSPC", "^IXIC", "^GSPTSE"}))
     symboles_possedes = tuple(set(df_portefeuille_actif['Symbole'].dropna().astype(str).str.strip()))
 
     # === PHASE 1 : PORTEFEUILLE (priorité 1) — récupéré et AFFICHÉ en premier ===
     jetons = jetons_fetch(rafraichir_auto and (ouvert_us or ouvert_ca), ouvert_us, ouvert_ca)
     with st.spinner("Chargement du Portefeuille..."):
-        yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True, jeton=jetons["P1"])
+        yahoo_p1 = telecharger_yahoo((g1,), retry_premier=True, jeton=jetons["P1"], reels=symboles_reels)
 
     # === v7 : cache YF (secours quand Yahoo bloque .info -> scores stables) ===
     if 'cache_yf' not in st.session_state:
@@ -2003,8 +2032,10 @@ try:
         _sect = _sect[_sect.str.strip() != ""]
         secteurs_portefeuille = _sect.value_counts().to_dict()
 
-    # Sauvegarde auto du Portefeuille (une fois par rafraîchissement, via signature)
-    sig_port = signature_donnees(("PORT",) + g1)
+    # Sauvegarde auto du Portefeuille : UNIQUEMENT quand le groupe P1 a réellement été
+    # rafraîchi (son jeton change). L'ancienne signature horaire réécrivait les mêmes
+    # valeurs toutes les 5 min et MAJ YF avançait sans données neuves.
+    sig_port = f"PORT-{jetons['P1']}-{hash(g1)}"
     if st.session_state.get('sig_save_port') != sig_port:
         ok_p, msg_p = sauvegarder_donnees_dans_sheets(df_live, 'Portefeuille BNC')
         st.session_state['sig_save_port'] = sig_port
@@ -2198,8 +2229,8 @@ try:
     # Appels SÉPARÉS par groupe : chacun a son propre cache/jeton (cadences 25/35 min
     # en mode auto ; en mode normal les jetons partagent la même tranche de 5 min).
     with st.spinner("Chargement des Prospects (CAD puis US)..."):
-        yahoo_p2 = telecharger_yahoo((g2,), jeton=jetons["P2"])
-        yahoo_p3 = telecharger_yahoo((g3,), jeton=jetons["P3"])
+        yahoo_p2 = telecharger_yahoo((g2,), jeton=jetons["P2"], reels=symboles_reels)
+        yahoo_p3 = telecharger_yahoo((g3,), jeton=jetons["P3"], reels=symboles_reels)
     yahoo_p23 = {**{k: v for k, v in yahoo_p2.items() if not k.startswith('__')},
                  **{k: v for k, v in yahoo_p3.items() if not k.startswith('__')}}
     yahoo_data = {**yahoo_p1, **yahoo_p23}   # équivalents US de P1 partagés (règle de trois)
@@ -2211,8 +2242,8 @@ try:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
     df_live_prospects = calculer_score_decision(df_live_prospects, secteurs_portefeuille=secteurs_portefeuille)  # === v5/v7 ===
 
-    # Sauvegarde auto des Prospects
-    sig_pros = signature_donnees(("PROS",) + g2 + g3)
+    # Sauvegarde auto des Prospects (même principe : au rythme des jetons P2/P3)
+    sig_pros = f"PROS-{jetons['P2']}-{jetons['P3']}-{hash(g2 + g3)}"
     if st.session_state.get('sig_save_pros') != sig_pros:
         ok_r, msg_r = sauvegarder_donnees_dans_sheets(df_live_prospects, 'Prospects')
         st.session_state['sig_save_pros'] = sig_pros
@@ -2278,7 +2309,7 @@ try:
     # === v7 : JOURNAL (1 fois/jour) puis ONGLET DÉCISION =========================
     journal_rows = []
     if journaliser:
-        sig_journal = signature_donnees(("JOURNAL",) + g1 + g2 + g3)
+        sig_journal = f"JOURNAL-{jetons['P1']}-{jetons['P2']}-{jetons['P3']}"
         if st.session_state.get('sig_journal') != sig_journal:
             # Clôtures des indices pour la courbe « Portefeuille vs marché »
             indices_cloture = {}
@@ -2298,7 +2329,7 @@ try:
             journal_rows = st.session_state.get('journal_rows', [])
 
     # === v7 : sauvegarde du cache YF (1 fois par rafraîchissement) ===
-    sig_cache = signature_donnees(("CACHE",) + g1 + g2 + g3)
+    sig_cache = f"CACHE-{jetons['P1']}-{jetons['P2']}-{jetons['P3']}"
     if st.session_state.get('sig_cache_yf') != sig_cache:
         erreur_cache = sauvegarder_cache_yf(df_live, df_live_prospects)
         if erreur_cache:

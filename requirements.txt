@@ -1,7 +1,5 @@
 streamlit
 pandas
+numpy
 yfinance
-openpyxl
-requests
 gspread
-plotly

@@ -240,6 +240,20 @@ def normaliser_symboles_source(ws, vals=None, notation_connue=None):
     return len(updates)
 
 
+def ecrire_lignes_ab(ws_prospects, premiere, nouvelles_ab):
+    """Écrit des lignes A:B à partir de `premiere`, en AGRANDISSANT la grille au
+    besoin : ws.update ne redimensionne pas — à grille pleine (400 lignes),
+    l'ajout échouait avec « exceeds grid limits » (audit 2026-08-28)."""
+    derniere = premiere + len(nouvelles_ab) - 1
+    try:
+        if getattr(ws_prospects, 'row_count', None) and derniere > ws_prospects.row_count:
+            ws_prospects.resize(rows=derniere + 20)
+    except Exception:
+        pass   # au pire, l'update échouera avec un message explicite
+    ws_prospects.update(nouvelles_ab, f"A{premiere}:B{derniere}",
+                        value_input_option='USER_ENTERED')
+
+
 def ajouter_titres_surperformance(ws_prospects, vals_prospects, lignes_source, seuil=15.0):
     """Ajoute à Prospects une ligne (Symbole + Description seulement) pour chaque
     titre de l'onglet LesAffaires qui respecte LES TROIS critères :
@@ -297,9 +311,7 @@ def ajouter_titres_surperformance(ws_prospects, vals_prospects, lignes_source, s
     # Écrire UNIQUEMENT A:B (ne jamais poser de '' sous l'ARRAYFORMULA de K).
     premiere = len(vals_prospects) + 1
     nouvelles_ab = [[sym, desc] for _, sym, desc in a_ajouter.values()]
-    ws_prospects.update(nouvelles_ab,
-                        f"A{premiere}:B{premiere + len(nouvelles_ab) - 1}",
-                        value_input_option='USER_ENTERED')
+    ecrire_lignes_ab(ws_prospects, premiere, nouvelles_ab)
     for _, sym, desc in a_ajouter.values():
         ligne = [''] * len(ent_p)
         ligne[i_sym_p] = sym
@@ -363,9 +375,7 @@ def ajouter_titres_top50(ws_prospects, vals_prospects, lignes_top50, seuil=25.0)
     # Écrire UNIQUEMENT A:B (ne jamais poser de '' sous l'ARRAYFORMULA de K).
     premiere = len(vals_prospects) + 1
     nouvelles_ab = [[sym, desc] for sym, desc in a_ajouter.values()]
-    ws_prospects.update(nouvelles_ab,
-                        f"A{premiere}:B{premiere + len(nouvelles_ab) - 1}",
-                        value_input_option='USER_ENTERED')
+    ecrire_lignes_ab(ws_prospects, premiere, nouvelles_ab)
     for sym, desc in a_ajouter.values():
         ligne = [''] * len(ent_p)
         ligne[i_sym_p] = sym
