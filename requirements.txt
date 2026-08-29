@@ -1,5 +1,7 @@
 streamlit
 pandas
 numpy
-yfinance
+# yfinance épinglé (audit 2026-08-28) : le format de dividendYield a déjà
+# changé silencieusement — mettre à niveau VOLONTAIREMENT, puis vérifier le canari.
+yfinance==1.2.0
 gspread

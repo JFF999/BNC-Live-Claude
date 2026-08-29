@@ -191,6 +191,28 @@ def obtenir_taux_change():
     except Exception:
         return 1.38   # repli aligné sur TAUX_USDCAD_DEFAUT du module sync
 
+# === Canari données (audit 2026-08-28) ==========================================
+# Détecte un changement de format SILENCIEUX des sources — le bug Div % ×100
+# venait d'un changement de format de yfinance passé inaperçu pendant des semaines.
+# Vérifications volontairement grossières : elles ne déclenchent que si un ordre
+# de grandeur est impossible, jamais sur une simple variation de marché.
+# ================================================================================
+def verifier_canari_donnees(taux, *dfs):
+    anomalies = []
+    try:
+        if not (1.15 <= float(taux) <= 1.65):
+            anomalies.append(f"taux USD/CAD suspect ({float(taux):.3f}, attendu 1,15–1,65)")
+    except (TypeError, ValueError):
+        pass
+    for df_ in dfs:
+        if df_ is None or df_.empty or 'Div %' not in df_.columns:
+            continue
+        dmax = pd.to_numeric(df_['Div %'], errors='coerce').max()
+        if pd.notna(dmax) and float(dmax) > 15:
+            anomalies.append(f"Div % invraisemblable ({float(dmax):.1f} % — format yfinance changé ?)")
+            break
+    return anomalies
+
 # --- CONNEXION GOOGLE SHEETS ---
 def connecter_google_sheets():
     info_cles = dict(st.secrets["gcp_service_account"])
@@ -225,6 +247,7 @@ def charger_donnees_base(nom_feuille):
     # --- LE NETTOYEUR DE NOMBRES FLOTTANTS ---
     colonnes_flottantes = [
         'Prix $', 'Achat $', 'Pré YF', 'Pré Aff',
+        'Pré MS',    # v9 : juste valeur Morningstar (3e source de cible)
         'Var %', 'Gain %', 'Gain $', 'Pré G %',
         'Prix GF',   # v8 : prix GOOGLEFINANCE (secours quand Yahoo ne fournit rien)
     ]
@@ -853,7 +876,8 @@ def synchroniser_affaires():
                                            ajouter_titres_surperformance,
                                            ajouter_titres_top50, ONGLET_TOP50,
                                            surligner_possedes,
-                                           cible_est_us, convertir_cible)
+                                           cible_est_us, convertir_cible,
+                                           copier_cibles_morningstar)
 
     sh = connecter_google_sheets()
     ws_src = sh.worksheet("LesAffaires")
@@ -941,6 +965,15 @@ def synchroniser_affaires():
                 n_vides += 1
     if updates:
         ws.batch_update(updates, value_input_option='USER_ENTERED')
+    # Cibles MORNINGSTAR -> Pré MS / MAJ MS (mêmes règles que Les Affaires :
+    # plus récente gagne, conversion $US->CAD avec garde CDR, vidage si disparue).
+    try:
+        lignes_ms = sh.worksheet("Morningstar").get_all_values()
+        _seuil_ms = float(plafond_preg) if plafond_preg and plafond_preg > 0 else 200.0
+        n_ms, _n_ms_v, _n_ms_c = copier_cibles_morningstar(ws, vals, lignes_ms,
+                                                           taux=taux_usdcad, seuil_cdr=_seuil_ms)
+    except Exception:
+        n_ms = 0                  # onglet absent ou pépin : l'import continue sans MS
     # Lignes ajoutées à la main (A+B seulement) : compléter liens + GOOGLEFINANCE.
     n_compl = completer_lignes_prospects(ws, vals)
     # Fond jaune sur les titres de Prospects présents dans Portefeuille BNC.
@@ -949,7 +982,7 @@ def synchroniser_affaires():
         surligner_possedes(sh, ws, vals, vals_port)
     except Exception:
         pass                      # le surlignage ne doit jamais faire échouer l'import
-    return n_maj, n_vides, n_compl, ajoutes, ajoutes_top50, n_conv
+    return n_maj, n_vides, n_compl, ajoutes, ajoutes_top50, n_conv, n_ms
 
 def url_google_sheet():
     # URL du Google Sheet pour le bouton « Ouvrir Sheet ».
@@ -978,10 +1011,12 @@ if url_sheet:
 if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Prospects)"):
     try:
         with st.spinner("Import Les Affaires..."):
-            n_maj, n_vides, n_compl, ajoutes, ajoutes_top50, n_conv = synchroniser_affaires()
+            n_maj, n_vides, n_compl, ajoutes, ajoutes_top50, n_conv, n_ms = synchroniser_affaires()
         message = f"📰 Les Affaires : {n_maj} mis à jour, {n_vides} vidé(s)."
         if n_conv:
             message += f" 💱 {n_conv} cible(s) $US converties en CAD."
+        if n_ms:
+            message += f" 🌟 Morningstar : {n_ms} cible(s)."
         if ajoutes:
             message += f" ➕ Surperformance : {', '.join(ajoutes)}."
         if ajoutes_top50:
@@ -1336,7 +1371,7 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                         return False
                     return prix_f / float(c_us.iloc[-1])
 
-                for col_cible in ('Pré Aff', 'Pré 1an $ Yahoo', 'Pré YF'):
+                for col_cible in ('Pré Aff', 'Pré MS', 'Pré 1an $ Yahoo', 'Pré YF'):
                     if col_cible not in df.columns:
                         continue
                     num = pd.to_numeric(pd.Series([df.at[index, col_cible]]), errors='coerce').iloc[0]
@@ -1467,30 +1502,48 @@ def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0, 
         perime = dates_aff.notna() & (dates_aff < seuil) & affaires.notna()
     affaires_calc = affaires.where(~perime, np.nan)   # ignorée dans le calcul si périmée
 
-    # === v7 : cible individuellement ABERRANTE écartée de la moyenne ===
-    # Si UNE des deux cibles implique un gain invraisemblable (> plafond) alors que
-    # l'AUTRE est plausible, l'aberrante est exclue du calcul (et grisée pour Pré Aff)
-    # au lieu de polluer la moyenne. Filet de sécurité quand la conversion CAD n'a pas
-    # pu s'exécuter (ex. NVDA.TO : Aff 300 $US non convertie vs Yahoo 67 $ plausible).
+    # === v9 : 3e source — juste valeur MORNINGSTAR (Pré MS, copiée par la synchro 📰
+    # depuis l'onglet Morningstar). Même règle de péremption, datée par MAJ MS.
+    if 'Pré MS' in df.columns:
+        morningstar = pd.to_numeric(df['Pré MS'], errors='coerce').replace(0, np.nan)
+    else:
+        morningstar = pd.Series(np.nan, index=df.index)
+    perime_ms = pd.Series(False, index=df.index)
+    if mois_max_aff and mois_max_aff > 0 and 'MAJ MS' in df.columns:
+        dates_ms = pd.to_datetime(df['MAJ MS'], errors='coerce')
+        seuil_ms = pd.Timestamp.now() - pd.DateOffset(months=int(mois_max_aff))
+        perime_ms = dates_ms.notna() & (dates_ms < seuil_ms) & morningstar.notna()
+    ms_calc = morningstar.where(~perime_ms, np.nan)
+
+    # === v7/v9 : cible individuellement ABERRANTE écartée de la moyenne ===
+    # Généralisation à TROIS sources (Yahoo / Affaires / Morningstar) : une cible dont
+    # le gain dépasse le plafond est exclue dès qu'au moins UNE autre cible plausible
+    # existe. Filet de sécurité quand la conversion CAD n'a pas pu s'exécuter
+    # (ex. NVDA.TO : cible 300 $US non convertie vs Yahoo 67 $ plausible).
     yahoo_calc = yahoo
     if plafond_preg and plafond_preg > 0:
         seuil_ab = float(plafond_preg)
-        gain_y = (yahoo - prix) / prix * 100
-        gain_a = (affaires_calc - prix) / prix * 100
-        y_ab = yahoo.notna() & (prix > 0) & (gain_y > seuil_ab)
-        a_ab = affaires_calc.notna() & (prix > 0) & (gain_a > seuil_ab)
-        excl_a = a_ab & yahoo.notna() & ~y_ab
-        excl_y = y_ab & affaires_calc.notna() & ~a_ab
-        affaires_calc = affaires_calc.where(~excl_a, np.nan)
+        def _aberrant(c):
+            return c.notna() & (prix > 0) & (((c - prix) / prix * 100) > seuil_ab)
+        y_ab, a_ab, m_ab = _aberrant(yahoo), _aberrant(affaires_calc), _aberrant(ms_calc)
+        plausibles = ((yahoo.notna() & ~y_ab).astype(int)
+                      + (affaires_calc.notna() & ~a_ab).astype(int)
+                      + (ms_calc.notna() & ~m_ab).astype(int))
+        excl_y = y_ab & (plausibles >= 1)
+        excl_a = a_ab & (plausibles >= 1)
+        excl_m = m_ab & (plausibles >= 1)
         yahoo_calc = yahoo.where(~excl_y, np.nan)
-        perime = perime | excl_a   # grise la Pré Aff écartée à l'affichage
+        affaires_calc = affaires_calc.where(~excl_a, np.nan)
+        ms_calc = ms_calc.where(~excl_m, np.nan)
+        perime = perime | excl_a         # grise la Pré Aff écartée à l'affichage
+        perime_ms = perime_ms | excl_m   # idem pour Pré MS
 
     if source == "Yahoo":
-        cible = yahoo_calc.fillna(affaires_calc)
+        cible = yahoo_calc.fillna(affaires_calc).fillna(ms_calc)
     elif source == "Affaires":
-        cible = affaires_calc.fillna(yahoo_calc)
+        cible = affaires_calc.fillna(yahoo_calc).fillna(ms_calc)
     else:
-        temp = pd.DataFrame({'Y': yahoo_calc, 'A': affaires_calc})
+        temp = pd.DataFrame({'Y': yahoo_calc, 'A': affaires_calc, 'M': ms_calc})
         cible = temp.mean(axis=1, skipna=True)
 
     mask = (prix > 0) & cible.notna()
@@ -1504,10 +1557,12 @@ def calculer_potentiel_gain(df, source, est_portefeuille=True, min_analystes=0, 
     else:
         df['Pré G Aberrant'] = pd.Series(False, index=df.index)
 
-    # Enregistrement pour l'affichage (valeur Pré Aff RÉELLE, grisée si périmée)
+    # Enregistrement pour l'affichage (valeurs RÉELLES, grisées si périmées)
     df['Pré YF Display'] = yahoo
     df['Pré Aff Display'] = affaires
     df['Pré Aff Périmé'] = perime
+    df['Pré MS Display'] = morningstar
+    df['Pré MS Périmé'] = perime_ms
 
     return df
 
@@ -1565,7 +1620,9 @@ def _pourquoi_achat(r):
     c = r.get("Concordance")
     if pd.notna(c):
         if c >= 70:
-            bits.append("2 sources concordantes")
+            n_src = sum(1 for k in ("Pré YF Display", "Pré Aff Display", "Pré MS Display")
+                        if pd.notna(r.get(k)))
+            bits.append(f"{max(n_src, 2)} sources concordantes")
         elif c < 40:
             bits.append("⚠️ cibles divergentes")
     ch = r.get("Chaleur 52s")
@@ -1593,6 +1650,7 @@ def calculer_score_decision(df, pour_portefeuille=False, secteurs_portefeuille=N
     var_jour = pd.to_numeric(df.get("Var %"), errors="coerce")        # en %
     yahoo = pd.to_numeric(df.get("Pré YF Display"), errors="coerce")  # cible $ Yahoo
     affaires = pd.to_numeric(df.get("Pré Aff Display"), errors="coerce")  # cible $ Affaires
+    morningstar = pd.to_numeric(df.get("Pré MS Display"), errors="coerce")  # cible $ Morningstar (v9)
 
     # === v7 : neutralise le potentiel ABERRANT dans le score/rang (mais pas à l'affichage) ===
     aberrant = df.get("Pré G Aberrant")
@@ -1648,17 +1706,26 @@ def calculer_score_decision(df, pour_portefeuille=False, secteurs_portefeuille=N
     confiance += donnees_ok.astype(bool) * 20
     confiance += yahoo.notna() * 20
     confiance += affaires.notna() * 15
+    confiance += morningstar.notna() * 10   # v9 : 3e source = confiance en plus (plafonné à 100)
     confiance += chaleur.notna() * 10
     confiance += volatilite.notna() * 10
     confiance += dividende.notna() * 5
 
-    deux_cibles = yahoo.notna() & affaires.notna() & (yahoo > 0) & (affaires > 0)
-    desaccord = (abs(yahoo - affaires) / pd.concat([yahoo, affaires], axis=1).mean(axis=1)).where(deux_cibles)
+    # === v9 : désaccord MULTI-SOURCES — moyenne des écarts relatifs de chaque paire
+    # disponible (Yahoo/Affaires, Yahoo/Morningstar, Affaires/Morningstar).
+    # NaN tant que MOINS de deux sources existent (comme avant).
+    def _ecart_paire(c1, c2):
+        ok = c1.notna() & c2.notna() & (c1 > 0) & (c2 > 0)
+        return ((c1 - c2).abs() / ((c1 + c2) / 2)).where(ok)
+    ecarts = pd.concat([_ecart_paire(yahoo, affaires),
+                        _ecart_paire(yahoo, morningstar),
+                        _ecart_paire(affaires, morningstar)], axis=1)
+    desaccord = ecarts.mean(axis=1, skipna=True)
     confiance -= desaccord.fillna(0).clip(0, 1) * 25
     df["Confiance"] = confiance.clip(0, 100)
 
-    # === v7 : Concordance des deux cibles (0..100), NaN si une seule source ===
-    df["Concordance"] = (100 * (1 - desaccord.clip(0, 1))).where(deux_cibles)
+    # Concordance (0..100) : accord entre les cibles disponibles (NaN si < 2 sources).
+    df["Concordance"] = 100 * (1 - desaccord.clip(0, 1))
 
     # --- Risque : volatilité + proximité du sommet 52s + cible atteinte + faible confiance ---
     risque = pd.Series(30.0, index=df.index)
@@ -1786,6 +1853,8 @@ def griser_pre_aff_perime(row):
     gris = 'color: #9aa0a6; font-style: italic;'
     if row.get('Pré Aff Périmé') and 'Pré Aff Display' in row.index:
         styles[row.index.get_loc('Pré Aff Display')] = gris
+    if row.get('Pré MS Périmé') and 'Pré MS Display' in row.index:
+        styles[row.index.get_loc('Pré MS Display')] = gris
     if row.get('Pré G Aberrant') and 'Pré G %' in row.index:
         styles[row.index.get_loc('Pré G %')] = gris
     return styles
@@ -1869,6 +1938,7 @@ def config_colonnes_communes():
         "Pré G %": st.column_config.NumberColumn("Pré G %", format="%.1f %%"),
         "Pré YF Display": st.column_config.NumberColumn("Pré YF", format="$ %.2f"),
         "Pré Aff Display": st.column_config.NumberColumn("Pré Aff", format="$ %.2f"),
+        "Pré MS Display": st.column_config.NumberColumn("Pré MS", format="$ %.2f"),
         "Tendance": st.column_config.LineChartColumn("Tendance (1m)"),
         "Chaleur 52s": st.column_config.ProgressColumn("♨️ 52 sem.", format="%.0f %%", min_value=0, max_value=100),
         "Div %": st.column_config.NumberColumn("Div %", format="%.2f %%"),
@@ -1892,6 +1962,7 @@ def config_colonnes_communes():
         "Date Achat": st.column_config.DatetimeColumn("Date Achat", format="YYYY-MM-DD"),
         "MAJ YF": st.column_config.TextColumn("Date YF", width="small"),
         "MAJ Aff": st.column_config.TextColumn("Date Aff", width="small"),
+        "MAJ MS": st.column_config.TextColumn("Date MS", width="small"),
     }
     # === v7 : sur MOBILE, le Rang en simple chiffre très étroit (la barre de
     # progression est trop large pour un petit écran). Sur ordinateur, barre inchangée.
@@ -2113,7 +2184,8 @@ try:
     if afficher_volatilite: colonnes_base_pros.append("Volatilité 1m")
     if afficher_analystes: colonnes_base_pros.append("Nb Analystes")  # === V4 ===
     if afficher_fondamentaux: colonnes_base_pros.extend(["P/E", "Croiss Rev %", "Marge %"])  # === v7 ===
-    colonnes_base_pros.extend(["Pré YF Display", "MAJ YF", "Pré Aff Display", "MAJ Aff"])
+    colonnes_base_pros.extend(["Pré YF Display", "MAJ YF", "Pré Aff Display", "MAJ Aff",
+                               "Pré MS Display", "MAJ MS"])
     if afficher_pourquoi: colonnes_base_pros.append("Pourquoi")        # === v7 ===
 
     # === v7 : MODE MOBILE — on ne garde que les colonnes ESSENTIELLES (l'ordre des
@@ -2241,6 +2313,12 @@ try:
     for col in ["Pré G %", "Var %"]:
         if col in df_live_prospects.columns: df_live_prospects[col] = pd.to_numeric(df_live_prospects[col], errors='coerce') * 100
     df_live_prospects = calculer_score_decision(df_live_prospects, secteurs_portefeuille=secteurs_portefeuille)  # === v5/v7 ===
+
+    # === Canari données : bannière d'avertissement si un format de source a changé ===
+    _anomalies = verifier_canari_donnees(taux_usdcad, df_live, df_live_prospects)
+    if _anomalies:
+        st.warning("🐤 Canari données : " + " · ".join(_anomalies)
+                   + " — vérifier les sources avant de se fier aux chiffres.")
 
     # Sauvegarde auto des Prospects (même principe : au rythme des jetons P2/P3)
     sig_pros = f"PROS-{jetons['P2']}-{jetons['P3']}-{hash(g2 + g3)}"
@@ -2692,9 +2770,10 @@ try:
             simplement ignorée, donc elle ne pénalise pas injustement le titre.
 
             ### 🛡️ Confiance (0–100)
-            Monte quand les données sont complètes (prix, cible Yahoo, cible Affaires, chaleur,
-            volatilité, dividende). **Baisse fortement quand les cibles Yahoo et Affaires se
-            contredisent** : si les deux analyses ne sont pas d'accord, on a moins confiance.
+            Monte quand les données sont complètes (prix, cibles Yahoo / Affaires /
+            **Morningstar (Pré MS)**, chaleur, volatilité, dividende). **Baisse fortement
+            quand les cibles disponibles se contredisent** (écart moyen entre chaque paire
+            de sources).
 
             ### ⚠️ Risque (0–100)
             Monte avec la **volatilité**, la **proximité du sommet 52 sem.**, un **objectif déjà
@@ -2716,8 +2795,9 @@ try:
             - **🏆 Rang d'achat (0–100)** — classement composite : `45 % Score + 20 % Entrée +
               15 % Concordance + 20 % (100 − Risque)`, **moins 5 pts par titre déjà détenu dans
               le même secteur**. Les Prospects sont triés par ce rang par défaut.
-            - **Concordance (0–100)** — degré d'accord entre les deux cibles (Yahoo & Les
-              Affaires). 100 = cibles identiques ; faible = elles se contredisent (⚠️).
+            - **Concordance (0–100)** — degré d'accord entre les cibles disponibles (Yahoo,
+              Les Affaires, Morningstar — dès que deux existent). 100 = identiques ;
+              faible = elles se contredisent (⚠️).
             - **Entrée (0–100)** — qualité du point d'entrée : potentiel + proximité du **creux
               52 sem.** + momentum court. Élevé = bon moment pour entrer.
             - **Garde-fou anti-aberration** — un Pré G % au-dessus du seuil (Paramètres, défaut

@@ -385,6 +385,92 @@ def ajouter_titres_top50(ws_prospects, vals_prospects, lignes_top50, seuil=25.0)
     return [sym for sym, _d in a_ajouter.values()]
 
 
+ONGLET_MORNINGSTAR = "Morningstar"   # onglet de justes valeurs Morningstar (même classeur)
+
+
+def copier_cibles_morningstar(ws_prospects, vals_prospects, lignes_ms, taux=None, seuil_cdr=200.0):
+    """Copie les justes valeurs de l'onglet « Morningstar » (même structure que
+    LesAffaires : Date / Symbole / Cours cible) vers Prospects, colonnes
+    « Pré MS » / « MAJ MS ». Mêmes règles que la copie Les Affaires : appariement
+    par clé unifiée, la plus RÉCENTE gagne, conversion $US -> CAD avec le garde CDR
+    de convertir_cible, valeurs VIDÉES quand le titre a quitté la source.
+    Les titres Morningstar ABSENTS de Prospects sont ignorés (ajouter la ligne A+B
+    à la main ; completer_lignes_prospects fait le reste).
+    Renvoie (n_maj, n_vides, n_conv)."""
+    if not vals_prospects or len(vals_prospects) < 2 or not lignes_ms:
+        return 0, 0, 0
+    ent_p = vals_prospects[0]
+    i_sym_p = trouver(ent_p, 'Symbole')
+    i_pms = trouver(ent_p, 'Pré MS')
+    i_mms = trouver(ent_p, 'MAJ MS')
+    i_dev = trouver(ent_p, 'Devise')
+    i_prix = trouver(ent_p, 'Prix $')
+    if i_sym_p is None or i_pms is None:
+        return 0, 0, 0            # colonnes Pré MS absentes : rien à faire
+
+    ent_s = lignes_ms[0]
+    i_date = trouver(ent_s, 'Date')
+    i_sym = trouver(ent_s, 'Symbole')
+    i_cible = trouver(ent_s, 'Cours cible')
+    if i_date is None:  i_date = SRC_COL_DATE
+    if i_sym is None:   i_sym = SRC_COL_SYMBOLE
+    if i_cible is None: i_cible = SRC_COL_CIBLE
+
+    cibles = {}
+    for row in lignes_ms[1:]:
+        if len(row) <= max(i_sym, i_cible, i_date):
+            continue
+        sym = str(row[i_sym]).strip().upper()
+        if not sym:
+            continue
+        cible = parse_nombre(row[i_cible])
+        if cible is None:
+            continue
+        date = str(row[i_date]).strip()
+        cle = cle_symbole(sym)
+        ancien = cibles.get(cle)
+        if ancien is None or date_key(date) >= date_key(ancien[0]):
+            cibles[cle] = (date, cible, str(row[i_cible]))
+
+    updates, n_maj, n_vides, n_conv = [], 0, 0, 0
+    for r, row in enumerate(vals_prospects[1:], start=2):
+        if len(row) <= i_sym_p:
+            continue
+        sym = str(row[i_sym_p]).strip().upper()
+        if not sym or sym == '0':
+            continue
+        entree = cibles.get(cle_symbole(sym))
+        pms_actuel = str(row[i_pms]).strip() if len(row) > i_pms else ''
+        mms_actuel = str(row[i_mms]).strip() if (i_mms is not None and len(row) > i_mms) else ''
+        if entree:
+            date, cible, texte = entree
+            devise = str(row[i_dev]).strip() if (i_dev is not None and len(row) > i_dev) else ''
+            if cible_est_us(texte) and devise.upper() == 'CAD':
+                if taux is None:
+                    taux = taux_usdcad()
+                prix_c = parse_nombre(row[i_prix]) if (i_prix is not None and len(row) > i_prix) else None
+                cible, conv = convertir_cible(cible, texte, devise, taux, prix_c, seuil_cdr)
+                if conv:
+                    n_conv += 1
+            updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pms + 1), 'values': [[cible]]})
+            if i_mms is not None and date:
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_mms + 1), 'values': [[date]]})
+            n_maj += 1
+        else:
+            a_vide = False
+            if pms_actuel != '':
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pms + 1), 'values': [['']]})
+                a_vide = True
+            if i_mms is not None and mms_actuel != '':
+                updates.append({'range': gspread.utils.rowcol_to_a1(r, i_mms + 1), 'values': [['']]})
+                a_vide = True
+            if a_vide:
+                n_vides += 1
+    if updates:
+        ws_prospects.batch_update(updates, value_input_option='USER_ENTERED')
+    return n_maj, n_vides, n_conv
+
+
 # Jaune doux — même teinte que le surlignage « possédé » de l'app (or à 40 % sur blanc).
 COULEUR_POSSEDE = {'red': 1.0, 'green': 0.937, 'blue': 0.6}
 
@@ -676,6 +762,18 @@ def main():
             ws.batch_update(updates, value_input_option='USER_ENTERED')
         journal(f"  [OK] {nom_feuille} : {n_maj} mis a jour, {n_vides} vide(s) (hors Surperformance)"
                 + (f", {n_conv} cible(s) $US converties en CAD." if n_conv else "."))
+
+        # === Cibles MORNINGSTAR -> Pré MS / MAJ MS (mêmes règles que Les Affaires) ===
+        if nom_feuille == 'Prospects':
+            try:
+                lignes_ms = dest.worksheet(ONGLET_MORNINGSTAR).get_all_values()
+                n_ms, n_ms_v, n_ms_c = copier_cibles_morningstar(ws, vals, lignes_ms, taux)
+                journal(f"  [OK] Morningstar : {n_ms} cible(s) copiee(s), {n_ms_v} videe(s)"
+                        + (f", {n_ms_c} convertie(s) en CAD." if n_ms_c else "."))
+            except gspread.exceptions.WorksheetNotFound:
+                pass
+            except Exception as e:
+                journal(f"  [ATTENTION] copie Morningstar : {type(e).__name__} - {e}")
 
         # Lignes ajoutees a la main (A+B seulement) : completer C/J/L/M.
         n_compl = completer_lignes_prospects(ws, vals)
