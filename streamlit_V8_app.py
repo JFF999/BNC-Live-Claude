@@ -898,7 +898,12 @@ with col_param:
         cfg_courant[nom_p] = "1" if val_p else "0"
     cfg_cles = {k + SUFFIXE_CFG: v for k, v in cfg_courant.items()}   # v9 : par appareil
     if any(CFG_APP.get(k) != v for k, v in cfg_cles.items()):
-        cfg_complet = dict(CFG_APP)          # préserve les clés de l'AUTRE appareil
+        # v9.1 : fusionner sur une lecture FRAÎCHE du Sheet, pas sur l'instantané de
+        # début de session — un PC resté ouvert écrasait sinon les réglages @mobile
+        # faits entre-temps (et inversement). En cas d'échec de lecture, repli sur
+        # l'instantané (charger_config_app renvoie {} sans lever).
+        cfg_complet = dict(CFG_APP)
+        cfg_complet.update(charger_config_app())
         cfg_complet.update(cfg_cles)
         if sauvegarder_config_app(cfg_complet):
             st.session_state['config_app'] = cfg_complet
@@ -1092,6 +1097,11 @@ def url_google_sheet():
 
 if col_refresh.button("🔄", help=f"Rafraîchir (dernière heure : {heure_actuelle})"):
     st.cache_data.clear()
+    # v9.1 : réarmer les sauvegardes auto — les signatures par JETON ne changent pas
+    # lors d'un rafraîchissement MANUEL ; sans ceci, les données fraîches s'affichaient
+    # mais le Sheet (et donc bnc_alertes) restait sur les anciennes valeurs.
+    for _cle in ('sig_save_port', 'sig_save_pros', 'sig_journal', 'sig_cache_yf'):
+        st.session_state.pop(_cle, None)
     st.rerun()
 url_sheet = url_google_sheet()
 if url_sheet:
@@ -1113,6 +1123,10 @@ if col_aff.button("📰", help="Importer Les Affaires (onglet LesAffaires → Pr
             message += f" {n_compl} nouvelle(s) ligne(s) complétée(s)."
         st.toast(message, icon="✅")
         st.cache_data.clear()   # recharge les Pré Aff fraîches
+        # v9.1 : réarmer aussi les sauvegardes — les scores N-S recalculés avec les
+        # nouvelles Pré Aff / Pré MS doivent repartir vers le Sheet sans attendre.
+        for _cle in ('sig_save_port', 'sig_save_pros', 'sig_journal', 'sig_cache_yf'):
+            st.session_state.pop(_cle, None)
         st.rerun()
     except Exception as e:
         st.error(f"Import Les Affaires : {type(e).__name__} - {e}")
@@ -2345,8 +2359,13 @@ try:
             valeur_totale_nette = valeurs_converties.sum()
             gain_total_net = gains_convertis.sum()
             gain_jour_total_net = gains_jour_convertis.sum()
+            # v9.1 : valeur BRUTE (jamais convertie) pour le Journal — la courbe
+            # « vs marché » et les flux AchatVente gardent la même convention même
+            # si la case « Taux de change actif » change un jour.
+            valeur_brute_totale = valeurs_brutes.sum()
         else:
             valeur_totale_nette = 0
+            valeur_brute_totale = 0
             gain_total_net = 0
             gain_jour_total_net = 0
             titre_gain = "Gain total"
@@ -2515,7 +2534,7 @@ try:
                     if len(c_i):
                         indices_cloture[sym_i] = float(c_i.iloc[-1])
             journal_rows, ecrit = journaliser_signaux(df_live, df_live_prospects,
-                                                      valeur_totale_nette, indices_cloture)
+                                                      valeur_brute_totale, indices_cloture)
             st.session_state['sig_journal'] = sig_journal
             st.session_state['journal_rows'] = journal_rows
             if ecrit:
