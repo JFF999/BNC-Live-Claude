@@ -345,6 +345,7 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
 
         horodatage = datetime.now(ZoneInfo("America/Toronto")).strftime("%Y-%m-%d %H:%M")
         mises_a_jour = []
+        non_finis = []   # (symbole, colonne) des ±inf rencontrés : jamais envoyés à l'API
         for i, row_data in enumerate(valeurs):
             if i == 0:
                 continue  # ligne d'en-tête
@@ -358,6 +359,13 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
             ecrit_ligne = False
             for col1, df_col in colonnes_a_ecrire.items():
                 valeur = row_live.get(df_col)
+                # ±inf (division par zéro en amont) : « Out of range float values are
+                # not JSON compliant » côté Google -> la cellule est laissée telle quelle,
+                # comme pour un NaN, et l'anomalie est remontée dans le message.
+                if (df_col not in colonnes_texte and pd.notna(valeur)
+                        and not math.isfinite(float(valeur))):
+                    non_finis.append((sym, df_col))
+                    continue
                 if pd.notna(valeur):
                     if df_col in colonnes_texte:
                         valeur_finale = str(valeur)
@@ -377,6 +385,14 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
                     'values': [[horodatage]],
                 })
 
+        if non_finis:
+            # Diagnostic visible : quel titre / quelle colonne a produit un ±inf
+            # (avant : la sauvegarde entière échouait, sans dire d'où ça venait).
+            detail = ", ".join(f"{s_} ({c_})" for s_, c_ in non_finis[:6])
+            if len(non_finis) > 6:
+                detail += f" … (+{len(non_finis) - 6})"
+            st.warning(f"⚠️ « {nom_feuille} » : valeur infinie ignorée pour {detail}. "
+                       "Vérifie Achat $ (0 ou « -0,00 » ?) ou le prix de la veille.")
         if not mises_a_jour:
             return False, "Aucune donnée à écrire."
         feuille.batch_update(mises_a_jour)
@@ -1376,7 +1392,8 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 df.at[index, 'Prix $'] = prix_actuel
                 # NB : auto_adjust=True ajuste la clôture de la VEILLE un jour de
                 # détachement de dividende -> Var % peut différer un peu du courtier.
-                df.at[index, 'Var %'] = (prix_actuel - prix_veille) / prix_veille
+                if prix_veille > 0:   # clôture de la veille à 0 (glitch Yahoo) -> pas de Var %
+                    df.at[index, 'Var %'] = (prix_actuel - prix_veille) / prix_veille
                 df.at[index, 'Données OK'] = True
 
                 tendances.append(serie_close.tolist())
@@ -1389,8 +1406,11 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                 if est_portefeuille and 'Achat $' in row and pd.notna(row['Achat $']) and str(row['Achat $']).strip() != "":
                     achat = float(row['Achat $'])
                     qte = float(row['Qtée']) if 'Qtée' in row and pd.notna(row['Qtée']) and str(row['Qtée']).strip() != "" else 0
-                    df.at[index, 'Gain %'] = (prix_actuel - achat) / achat
-                    df.at[index, 'Gain $'] = (prix_actuel - achat) * qte
+                    # Achat $ à 0 (ligne en cours de saisie, ou « -0,00 » affiché par le
+                    # Sheet -> -0.0) : la division donnerait ±inf, non sérialisable JSON.
+                    if achat > 0:
+                        df.at[index, 'Gain %'] = (prix_actuel - achat) / achat
+                        df.at[index, 'Gain $'] = (prix_actuel - achat) * qte
                     df.at[index, 'Gain Jour $'] = (prix_actuel - prix_veille) * qte
             else:
                 tendances.append(None)
@@ -1408,8 +1428,9 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
                     if est_portefeuille and 'Achat $' in row and pd.notna(row['Achat $']) and str(row['Achat $']).strip() != "":
                         achat = float(row['Achat $'])
                         qte = float(row['Qtée']) if 'Qtée' in row and pd.notna(row['Qtée']) and str(row['Qtée']).strip() != "" else 0
-                        df.at[index, 'Gain %'] = (prix_actuel - achat) / achat
-                        df.at[index, 'Gain $'] = (prix_actuel - achat) * qte
+                        if achat > 0:   # même garde que la branche Yahoo
+                            df.at[index, 'Gain %'] = (prix_actuel - achat) / achat
+                            df.at[index, 'Gain $'] = (prix_actuel - achat) * qte
 
             prevision_1an = infos_gen.get('targetMeanPrice')
             if prevision_1an is not None:
