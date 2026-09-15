@@ -355,6 +355,11 @@ def sauvegarder_donnees_dans_sheets(df_live, nom_feuille):
             if not sym or sym not in dict_live:
                 continue
             row_live = dict_live[sym]
+            # Pas de prix frais (Yahoo muet, titre délisté…) : rien de neuf à écrire.
+            # Réécrire la ligne ne ferait que recycler les valeurs lues du Sheet et
+            # avancer MAJ YF à tort.
+            if 'Données OK' in row_live.index and not bool(row_live['Données OK']):
+                continue
             ligne = i + 1   # gspread : ligne 1-based (en-tête = ligne 1)
             ecrit_ligne = False
             for col1, df_col in colonnes_a_ecrire.items():
@@ -1354,6 +1359,17 @@ def construire_donnees(df, dict_yahoo, est_portefeuille=True, symboles_portefeui
     df['Nb Analystes'] = np.nan  # === V4 ===
     df['Volatilité 1m'] = np.nan  # === v5 ===
     df['Données OK'] = False       # === v5 : prix bien récupéré ? ===
+    # Les pourcentages LUS du Sheet sont en % (« -24,6% » -> -24.6) alors que les
+    # valeurs calculées ci-dessous sont des FRACTIONS (×100 en aval). Sans cette
+    # remise en fraction, un titre SANS données Yahoo (ex. délisté) voyait sa
+    # valeur du Sheet ×100 à l'affichage et — via la sauvegarde — ×100 par cycle,
+    # jusqu'à l'overflow (-inf). Ici on aligne l'unité une fois pour toutes.
+    for _col_pct in ('Gain %', 'Var %', 'Pré G %'):
+        if _col_pct in df.columns:
+            _v = pd.to_numeric(df[_col_pct], errors='coerce') / 100.0
+            # Canari : au-delà de ±1 000 000 % c'est un résidu de l'ancienne boucle
+            # ×100 (ex. ODV.V à 1e305) — on l'oublie plutôt que de l'afficher.
+            df[_col_pct] = _v.where(_v.abs() <= 1e4, np.nan)
     df['Gain Jour $'] = 0.0
     df['Symbole Brut'] = ""
     df['Secteur'] = ""      # === v7 : secteur Yahoo (diversification) ===
