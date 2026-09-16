@@ -547,7 +547,8 @@ def completer_lignes_prospects(ws, vals=None):
     """Complète les colonnes dérivées des lignes ajoutées à la MAIN dans Prospects
     (l'utilisateur ne remplit que Symbole + Description) : C Lien Yahoo,
     J Lien Google Finance, L Prix GF et M Devise (formules GOOGLEFINANCE).
-    K (Symbole GF) se remplit seul via l'ARRAYFORMULA du Sheet ; F-I (Prix $,
+    K (Symbole GF) est posé par FORMULE PAR LIGNE (l'ARRAYFORMULA historique a été
+    réduite à une cellule dans le Sheet, v9.2) ; F-I (Prix $,
     Pré G %, Pré YF, MAJ YF) sont écrites par l'app au prochain passage Yahoo.
 
     Une ligne n'est « nouvelle » que si Lien Yahoo ET Lien Google Finance sont
@@ -590,12 +591,25 @@ def completer_lignes_prospects(ws, vals=None):
                         'values': [[f"https://www.google.com/finance/beta/quote/{symbole_gf(sym)}"]]})
         if i_sgf is not None:
             cell_k = gspread.utils.rowcol_to_a1(r, i_sgf + 1)
+            cell_j = gspread.utils.rowcol_to_a1(r, i_lgf + 1)
+            # v9.2 : K n'est PLUS rempli par une ARRAYFORMULA (réduite un jour à une
+            # formule mono-cellule dans le Sheet) -> formule d'extraction PAR LIGNE,
+            # sinon les nouvelles lignes restaient sans Symbole GF (K vide -> L et M
+            # en #N/A, vu sur DELL / EMP-A.TO / NPI.TO).
+            updates.append({'range': cell_k, 'values': [[
+                f'=IF({cell_j}="";"";REGEXREPLACE(REGEXEXTRACT({cell_j};"quote/(.+)$");'
+                f'"^(.+):NASDAQ$";"$1"))']]})
             if cellule_vide(row, i_pgf):
                 updates.append({'range': gspread.utils.rowcol_to_a1(r, i_pgf + 1),
                                 'values': [[f"=GOOGLEFINANCE({cell_k})"]]})
             if cellule_vide(row, i_dev):
+                # v9.2 : repli quand GOOGLEFINANCE ne couvre pas le titre (CDR, K
+                # vide) : bourse canadienne (TSE/CVE/NEO/CNSX) -> CAD, NASDAQ -> USD.
                 updates.append({'range': gspread.utils.rowcol_to_a1(r, i_dev + 1),
-                                'values': [[f'=GOOGLEFINANCE({cell_k};"currency")']]})
+                                'values': [[
+                    f'=IFERROR(GOOGLEFINANCE({cell_k};"currency");'
+                    f'IF(REGEXMATCH({cell_k}&{cell_j};"TSE:|CVE:|NEO:|CNSX:");"CAD";'
+                    f'IF(REGEXMATCH({cell_k}&{cell_j};"NASDAQ");"USD";"")))']]})
         n_completees += 1
 
     if updates:
