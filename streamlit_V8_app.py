@@ -204,13 +204,28 @@ def verifier_canari_donnees(taux, *dfs):
             anomalies.append(f"taux USD/CAD suspect ({float(taux):.3f}, attendu 1,15–1,65)")
     except (TypeError, ValueError):
         pass
+    # Div % : un changement de format (ex. le bug ×100 de 2026-08) gonfle BEAUCOUP
+    # de titres à la fois — c'est sa signature. UN rendement élevé isolé est
+    # plausible : MNR paie réellement ~16,5 % (1,80 $/action sur un titre à ~11 $,
+    # vérifié le 2026-09-17). On n'alerte donc que si PLUSIEURS titres dépassent
+    # 15 %, ou si un seul dépasse 40 % (quasi impossible légitimement).
+    hauts = {}
     for df_ in dfs:
         if df_ is None or df_.empty or 'Div %' not in df_.columns:
             continue
-        dmax = pd.to_numeric(df_['Div %'], errors='coerce').max()
-        if pd.notna(dmax) and float(dmax) > 15:
-            anomalies.append(f"Div % invraisemblable ({float(dmax):.1f} % — format yfinance changé ?)")
-            break
+        d = pd.to_numeric(df_['Div %'], errors='coerce')
+        syms = df_.get('Symbole Brut')
+        for s, v in zip((syms if syms is not None else d.index), d):
+            if pd.notna(v) and float(v) > 15:
+                s = str(s)
+                hauts[s] = max(hauts.get(s, 0.0), float(v))
+    if hauts:
+        pire_sym, pire_val = max(hauts.items(), key=lambda kv: kv[1])
+        if len(hauts) >= 3:
+            anomalies.append(f"{len(hauts)} titres à Div % > 15 % "
+                             f"(max {pire_sym} {pire_val:.1f} % — format yfinance changé ?)")
+        elif pire_val > 40:
+            anomalies.append(f"Div % invraisemblable pour {pire_sym} ({pire_val:.1f} %)")
     return anomalies
 
 # --- CONNEXION GOOGLE SHEETS ---
